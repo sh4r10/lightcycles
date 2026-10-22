@@ -81,6 +81,12 @@ mild fahhh for solo crashes, an overdriven meme FAHHH when someone gets you, kil
 assigned the case, and a siren when HARASMUS is close. Press `m` in game to
 mute, or pass `-mute`.
 
+**Bundled sounds.** Drop WAVs named after a sound into `soundpack/`
+(for example the real FAHHH meme as `soundpack/fahhh-meme.wav`) and run
+`go build`: they're compiled into the binary, played by its client, and
+sent by its server to every built-in client. The folder's WAVs are
+gitignored so the clip stays out of the public repo.
+
 **Server sounds.** Whoever runs the server can put WAVs named after the
 sounds (for example the real FAHHH meme clip as `fahhh-meme.wav`) in a
 `sounds/` folder next to it (`-sounds` to change). Every built-in client
