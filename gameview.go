@@ -147,13 +147,31 @@ func secs(ticks int) int { return ticks*int(tickRate)/int(time.Second) + 1 }
 func (v *gameView) renderHeader(me *Player) string {
 	st, s := v.st, v.snap
 	info := st.title.Render(s.Settings.Name) +
-		st.dim.Render(fmt.Sprintf(" · %s · round %d · you are ", sizes[s.Settings.Size].Name, s.Round)) +
+		st.dim.Render(fmt.Sprintf(" · %s · round %d · you are ", sizes[s.Settings.Size].Name, max(s.Round, 1))) +
 		st.cycle[me.Color].Bold(true).Render(colorNames[me.Color])
 
 	var status string
 	switch {
 	case s.Phase == Waiting:
 		status = st.bold.Render("Waiting for another player") + st.dim.Render("… bots are off in this game, invite a friend!")
+	case s.Phase == Ready:
+		var names []string
+		for _, p := range v.ranked() {
+			if p.Bot {
+				continue
+			}
+			mark := st.dim.Render(p.Name + " …")
+			if p.Ready {
+				mark = st.cycle[p.Color].Bold(true).Render(p.Name + " ✓")
+			}
+			names = append(names, mark)
+		}
+		ask := st.key.Render("ENTER") + st.dim.Render(" to ready up")
+		if me.Ready {
+			ask = st.bold.Render("You're ready") + st.dim.Render(" (ENTER to undo)")
+		}
+		status = ask + st.dim.Render(fmt.Sprintf(" · round %d starts when everyone is, or in %ds · ", s.Round+1, secs(s.PhaseLeft))) +
+			strings.Join(names, st.dim.Render(", "))
 	case s.Phase == RoundOver:
 		status = st.banner.Render(s.Banner) + st.dim.Render(fmt.Sprintf("  next round in %d", secs(s.PhaseLeft)))
 	case !me.InRound:

@@ -307,6 +307,10 @@ func (a app) updateGame(msg tea.Msg) (tea.Model, tea.Cmd) {
 		g.Turn(pid, Right)
 	case " ", "shift+up", "shift+down", "shift+left", "shift+right":
 		g.Boost(pid)
+	case "enter", "r":
+		if me := a.view.me(); me != nil && a.view.snap.Phase == Ready {
+			g.SetReady(pid, !me.Ready)
+		}
 	case "tab":
 		a.view.nextSpectate()
 	case "m":
@@ -381,8 +385,11 @@ func (a app) viewLobby() string {
 			players += fmt.Sprintf(" +%d bots", g.Bots)
 		}
 		status := fmt.Sprintf("round %d", g.Round)
-		if g.Phase == Waiting {
+		switch g.Phase {
+		case Waiting:
 			status = "waiting"
+		case Ready:
+			status = "ready check"
 		}
 		row := fmt.Sprintf("  %-22s %-12s %-7s %-12s %s", trunc(g.Name, 22), trunc(g.Host, 12), g.Size, players, status)
 		if i == a.sel {

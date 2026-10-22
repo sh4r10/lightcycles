@@ -41,6 +41,8 @@ then `lightcycles serve` / `lightcycles play HOST`.
 - **Space** boosts: double speed for a moment, then a 5s cooldown.
 - Hit a wall or any trail and you're out. When you crash, your trail
   vanishes and opens space for everyone else.
+- Before each round everyone gets a ready check: press **Enter** to ready up.
+  The round starts once every human is ready, or after 30 seconds.
 - Last cycle alive wins the round. Running someone into your trail is a kill.
 - While you're out, **Tab** switches which player the camera follows.
 - **q** goes back to the lobby.
@@ -79,9 +81,16 @@ mild fahhh for solo crashes, an overdriven meme FAHHH when someone gets you, kil
 assigned the case, and a siren when HARASMUS is close. Press `m` in game to
 mute, or pass `-mute`.
 
+**Server sounds.** Whoever runs the server can put WAVs named after the
+sounds (for example the real FAHHH meme clip as `fahhh-meme.wav`) in a
+`sounds/` folder next to it (`-sounds` to change). Every built-in client
+downloads them when it connects and plays them instead of the built-in
+ones, so the whole team hears the same clip without it living in this
+repo. Only WAVs up to 4MB named after a known sound are sent; to convert
+an mp3, run `ffmpeg -i clip.mp3 fahhh-meme.wav`.
+
 The client uses your OS's own player (`afplay` on macOS, `paplay`/`pw-play`/
-`aplay` on Linux, PowerShell on Windows). To replace a sound, say with a
-recording of the team yelling FAHHH, drop a WAV named after it (`fahhh`,
+`aplay` on Linux, PowerShell on Windows). To replace a sound just for yourself, drop a WAV named after it (`fahhh`,
 `fahhh-meme`, `ky`, `beep`, `go`, `kill`, `win`, `case`, `harasmus`) into
 `~/.config/lightcycles/sounds/` (or your OS's config directory).
 

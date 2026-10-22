@@ -20,6 +20,12 @@ const (
 	kyEvery       = 300 // ticks between KY toolkit spawns (15s)
 	kyLagLen      = 80  // ticks everyone else spends "loading KY toolkit" (4s)
 	kyDelay       = 12  // how far their steering lags behind, in ticks (0.6s)
+	readyLen      = 600 // ticks before a round starts without everyone ready (30s)
+
+	// Bot skill. Vision is how many open cells they look ahead; a blunder
+	// is a move where they just ride straight without looking.
+	botVision  = 50
+	botBlunder = 0.02
 )
 
 // Arena sizes a host can pick. Small fits on one screen; the others scroll
@@ -51,6 +57,7 @@ type Phase int
 
 const (
 	Waiting Phase = iota // not enough cycles to start
+	Ready                // waiting for humans to ready up (or the timer)
 	Countdown
 	Playing
 	RoundOver
@@ -72,6 +79,7 @@ type Player struct {
 	RoundKills int
 	KilledBy   int // who took you out this round, 0 for walls and your own trail
 	Lag        int // ticks left stuck loading KY toolkit
+	Ready      bool
 	lagged     []delayedTurn
 	Boost      int // ticks of boost remaining
 	Cooldown   int // ticks until boost is ready
@@ -469,6 +477,14 @@ func (g *Game) step() {
 	switch g.phase {
 	case Waiting:
 		if g.canStart() {
+			g.enterReady()
+		}
+	case Ready:
+		g.phaseLeft--
+		switch {
+		case !g.canStart():
+			g.phase = Waiting
+		case g.allReady() || g.phaseLeft <= 0:
 			g.startRound()
 		}
 	case Countdown:
@@ -489,11 +505,39 @@ func (g *Game) step() {
 		g.phaseLeft--
 		if g.phaseLeft <= 0 {
 			if g.canStart() {
-				g.startRound()
+				g.enterReady()
 			} else {
 				g.phase = Waiting
 			}
 		}
+	}
+}
+
+// enterReady asks every human to ready up for the next round. It starts
+// as soon as they all have, or when the timer runs out.
+func (g *Game) enterReady() {
+	for _, p := range g.players {
+		p.Ready = p.Bot
+	}
+	g.phase, g.phaseLeft = Ready, readyLen
+}
+
+func (g *Game) allReady() bool {
+	for _, p := range g.players {
+		if !p.Ready {
+			return false
+		}
+	}
+	return true
+}
+
+// SetReady marks a human ready (or not) for the next round.
+func (g *Game) SetReady(id int, ready bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if p, ok := g.players[id]; ok && g.phase == Ready {
+		p.Ready = ready
+		g.publish()
 	}
 }
 
@@ -731,13 +775,16 @@ func (g *Game) checkRoundOver() {
 // with a little noise so bots don't all play identically.
 func (g *Game) botThink(p *Player) {
 	p.queue = nil
+	if rand.Float64() < botBlunder {
+		return // daydreaming: keep going straight, whatever is ahead
+	}
 	best, bestScore := p.Dir, -1.0
 	for _, d := range []Dir{p.Dir, (p.Dir + 1) % 4, (p.Dir + 3) % 4} {
 		nx, ny := p.X+deltas[d][0], p.Y+deltas[d][1]
 		if g.blocked(nx, ny) {
 			continue
 		}
-		score := float64(g.space(nx, ny, 120))
+		score := float64(g.space(nx, ny, botVision))
 		if d == p.Dir {
 			score += 3
 		}
@@ -747,7 +794,7 @@ func (g *Game) botThink(p *Player) {
 				score -= 40
 			}
 		}
-		score += rand.Float64() * 6
+		score += rand.Float64() * 12
 		if score > bestScore {
 			best, bestScore = d, score
 		}
@@ -767,7 +814,8 @@ func (g *Game) harasmusThink(p *Player) {
 			prey = o
 		}
 	}
-	if prey == nil {
+	// He loses interest now and then, like a normal bot would.
+	if prey == nil || rand.Float64() < 0.25 {
 		g.botThink(p)
 		return
 	}
@@ -778,9 +826,9 @@ func (g *Game) harasmusThink(p *Player) {
 		if g.blocked(nx, ny) {
 			continue
 		}
-		room := g.space(nx, ny, 60)
+		room := g.space(nx, ny, botVision)
 		score := -float64(abs(tx-nx) + abs(ty-ny))
-		if room < 30 {
+		if room < 15 {
 			score += float64(room) - 1000 // only if nothing roomier exists
 		}
 		score += rand.Float64()

@@ -116,14 +116,21 @@ func TestWaitsWithoutBotsUntilSecondHuman(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.step()
+	if g.phase != Ready {
+		t.Fatalf("two humans should get a ready check, got phase %v", g.phase)
+	}
+	readyAll(g)
+	g.step()
 	if g.phase != Countdown {
-		t.Fatalf("two humans should start a countdown, got phase %v", g.phase)
+		t.Fatalf("everyone ready should start the countdown, got phase %v", g.phase)
 	}
 }
 
 func TestBotsFillAndYieldToHumans(t *testing.T) {
 	g := NewGame("b", Settings{Size: 0, MaxPlayers: 4, Bots: true}, nil)
 	g.Join("a")
+	g.step()
+	readyAll(g)
 	g.step()
 	if len(g.players) != 4 {
 		t.Fatalf("expected 1 human + 3 bots, got %d players", len(g.players))
@@ -195,5 +202,32 @@ func TestLobbyAndLeaderboard(t *testing.T) {
 	bob, err := store.Lookup("bob")
 	if err != nil || bob.Rank != 2 || bob.Deaths != 2 {
 		t.Fatalf("unexpected bob %+v %v", bob, err)
+	}
+}
+
+func readyAll(g *Game) {
+	for id, p := range g.players {
+		if !p.Bot {
+			g.SetReady(id, true)
+		}
+	}
+}
+
+func TestReadyCheckAutoStarts(t *testing.T) {
+	g := NewGame("r", Settings{Size: 0, MaxPlayers: 4}, nil)
+	a, _ := g.Join("a")
+	g.Join("b")
+	g.step()
+	g.SetReady(a, true)
+	for range readyLen - 2 {
+		g.step()
+	}
+	if g.phase != Ready {
+		t.Fatalf("one player not ready: should still be waiting, got phase %v", g.phase)
+	}
+	g.step()
+	g.step()
+	if g.phase != Countdown {
+		t.Fatalf("after 30s the round should start anyway, got phase %v", g.phase)
 	}
 }
