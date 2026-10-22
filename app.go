@@ -40,6 +40,7 @@ type session struct {
 
 	out       io.Writer // the player's terminal, for sounds
 	richSound bool      // the built-in client: send real sounds, not bells
+	kick      func(reason string)
 }
 
 func (s *session) play(snd Sound) {
@@ -144,6 +145,17 @@ func (a *app) refresh() {
 		a.sel = min(a.sel, max(len(a.games)-1, 0))
 	case scrGame:
 		a.sess.mu.Lock()
+		if g := a.sess.game; g != nil && g.Stopped() {
+			// An admin dropped the game under us.
+			a.lobby.Leave(g, a.sess.pid)
+			a.sess.game = nil
+			a.sess.mu.Unlock()
+			a.screen = scrLobby
+			a.err = "An admin closed that game."
+			a.loadBoard()
+			a.refresh()
+			return
+		}
 		if a.sess.game != nil {
 			prev := a.view.snap
 			a.view.snap = a.sess.game.Snapshot()
@@ -222,6 +234,9 @@ func (a app) updateName(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.sess.mu.Lock()
 			a.sess.name = name
 			a.sess.mu.Unlock()
+			if a.sess.kick != nil {
+				a.lobby.OnKick(name, a.sess.kick)
+			}
 			a.name = name
 			a.err = ""
 			a.screen = scrLobby

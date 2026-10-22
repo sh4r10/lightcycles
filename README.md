@@ -119,6 +119,35 @@ A host key is generated on first run. To host it publicly, run the binary on
 any VPS and open the SSH port. Using port 22 means people can drop `-p`, but
 move your admin sshd elsewhere first.
 
+## Admin console
+
+Set a password and `ssh admin@host` opens an admin console instead of the
+game. It's off unless a password is set.
+
+```
+LIGHTCYCLES_ADMIN_PASSWORD='something long' lightcycles serve   # or -admin-password
+ssh -t -p 2222 admin@host            # interactive console
+ssh -t -p 2222 admin@host games      # run one command and exit
+```
+
+| Command | What it does |
+| --- | --- |
+| `status`, `logs [n]` | uptime, memory, players, DB size; recent server log lines |
+| `games`, `show <game>` | running games; who's in one (game = ID or name) |
+| `drop <game>` | end a game, its players go back to the lobby (Team 7 HQ restarts fresh) |
+| `announce <msg>` | post in every game's feed |
+| `online`, `kick <name> [reason]` | signed-in players; disconnect one |
+| `players [filter]`, `top [n]` | database rows (with keys); the leaderboard |
+| `set <name> <stat> <n>`, `reset <name>` | fix a stat; zero a player |
+| `unbind <name>`, `delete <name>` | free a name from its SSH key (new laptop); forget a player |
+| `wipe yes` | zero everyone's stats |
+| `sql <statement>` | raw SQL against the leaderboard database |
+
+Wrong passwords are slowed down, each connection gets three tries, and five
+failures from one address lock it out (one minute, doubling up to an hour).
+Every login and command is logged. The name `admin` is reserved for this, so
+no player can take it.
+
 ## Layout
 
 - `game.go`: one arena: rounds, simultaneous move resolution, bots
@@ -129,4 +158,5 @@ move your admin sshd elsewhere first.
 - `client.go`: built-in SSH client (`play`)
 - `flavor.go`: Team 7 bot personas and feed lines
 - `sound.go`: sound cues, synthesised sounds and the client's audio player
+- `admin.go`: the admin console (`ssh admin@host`)
 - `main.go`: commands and the Wish SSH server

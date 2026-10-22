@@ -57,6 +57,7 @@ func serve(args []string) {
 	keyPath := fs.String("key", ".ssh/lightcycles_ed25519", "host key path (created if missing)")
 	dbPath := fs.String("db", "lightcycles.db", "SQLite leaderboard file (empty disables the leaderboard)")
 	soundsDir := fs.String("sounds", "sounds", "folder of custom WAVs (e.g. fahhh-meme.wav) sent to built-in clients")
+	adminPassword := fs.String("admin-password", os.Getenv("LIGHTCYCLES_ADMIN_PASSWORD"), "password for the admin console (ssh admin@host); empty disables it. Defaults to $LIGHTCYCLES_ADMIN_PASSWORD")
 	_ = fs.Parse(args)
 
 	var store *Store
@@ -68,6 +69,12 @@ func serve(args []string) {
 		defer store.Close()
 	}
 	lobby := NewLobby(store)
+	logs := captureLogs()
+	if *adminPassword == "" {
+		log.Info("admin console disabled (set LIGHTCYCLES_ADMIN_PASSWORD to enable it)")
+	} else if len(*adminPassword) < 12 {
+		log.Warn("the admin password is short; anyone who guesses it can wipe the leaderboard")
+	}
 
 	s, err := wish.NewServer(
 		wish.WithAddress(net.JoinHostPort(*host, *port)),
@@ -81,6 +88,7 @@ func serve(args []string) {
 				return handler(lobby, s)
 			}),
 			activeterm.Middleware(),
+			adminMiddleware(newAdmin(lobby, store, *adminPassword, logs)),
 			soundPackMiddleware(*soundsDir),
 			logging.Middleware(),
 		),
@@ -128,7 +136,11 @@ func handler(lobby *Lobby, s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	if k := s.PublicKey(); k != nil {
 		keyFP = gossh.FingerprintSHA256(k)
 	}
-	sess := &session{out: s}
+	sess := &session{out: s, kick: func(reason string) {
+		// Leave the alt screen so the message stays visible.
+		fmt.Fprintf(s, "\x1b[?1049l\r\nYou were kicked by an admin: %s\r\n", reason)
+		_ = s.Close()
+	}}
 	for _, e := range s.Environ() {
 		if e == "LIGHTCYCLES_CLIENT=1" {
 			sess.richSound = true

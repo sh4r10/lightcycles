@@ -17,11 +17,12 @@ type Lobby struct {
 	mu     sync.Mutex
 	games  map[string]*Game
 	online map[string]bool // lower-cased names of signed-in players
+	kicks  map[string]func(reason string)
 	store  *Store
 }
 
 func NewLobby(store *Store) *Lobby {
-	l := &Lobby{games: map[string]*Game{}, online: map[string]bool{}, store: store}
+	l := &Lobby{games: map[string]*Game{}, online: map[string]bool{}, kicks: map[string]func(string){}, store: store}
 	_, _ = l.Create(Settings{Name: "Team 7 HQ", Host: "server", Size: 1, MaxPlayers: 12, Bots: true, Permanent: true})
 	return l
 }
@@ -158,6 +159,71 @@ func (l *Lobby) SignOut(name string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.online, strings.ToLower(name))
+	delete(l.kicks, strings.ToLower(name))
+}
+
+// OnKick registers how to disconnect a signed-in player.
+func (l *Lobby) OnKick(name string, kick func(reason string)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.online[strings.ToLower(name)] {
+		l.kicks[strings.ToLower(name)] = kick
+	}
+}
+
+// Kick disconnects a signed-in player. It reports whether they were online.
+func (l *Lobby) Kick(name, reason string) bool {
+	l.mu.Lock()
+	kick := l.kicks[strings.ToLower(name)]
+	l.mu.Unlock()
+	if kick == nil {
+		return false
+	}
+	kick(reason)
+	return true
+}
+
+// OnlineNames lists signed-in players, lower-cased and sorted.
+func (l *Lobby) OnlineNames() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	names := make([]string, 0, len(l.online))
+	for n := range l.online {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// Find looks a game up by ID or (case-insensitive) name.
+func (l *Lobby) Find(key string) *Game {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if g, ok := l.games[key]; ok {
+		return g
+	}
+	for _, g := range l.games {
+		if strings.EqualFold(g.Settings.Name, key) {
+			return g
+		}
+	}
+	return nil
+}
+
+// Drop stops a game. Its players are sent back to the lobby. A permanent
+// game is replaced by a fresh one with the same settings.
+func (l *Lobby) Drop(g *Game) *Game {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	g.Stop()
+	delete(l.games, g.ID)
+	if !g.Settings.Permanent {
+		return nil
+	}
+	fresh := NewGame(newID(), g.Settings, l.record)
+	l.games[fresh.ID] = fresh
+	fresh.Start()
+	return fresh
 }
 
 func newID() string {

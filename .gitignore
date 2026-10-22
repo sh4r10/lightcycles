@@ -2,3 +2,4 @@ lightcycles
 .ssh/
 *.db
 *.db-*
+lcsrv

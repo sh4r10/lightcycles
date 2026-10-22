@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/log"
@@ -158,6 +159,150 @@ func validName(name string) error {
 		return errors.New("names need at least 2 characters")
 	case strings.HasPrefix(strings.ToLower(name), "bot"):
 		return errors.New("names starting with \"bot\" are reserved for bots")
+	case strings.EqualFold(name, adminUser):
+		return errors.New("that name is reserved")
 	}
 	return nil
+}
+
+// The admin console's view of the players table.
+
+// statColumns are the leaderboard columns an admin may set by hand.
+var statColumns = map[string]bool{"wins": true, "kills": true, "deaths": true, "cases": true, "rounds": true}
+
+// PlayerRow is one player as the admin console shows them.
+type PlayerRow struct {
+	Stat
+	Key      string
+	LastSeen string
+}
+
+// Players lists players whose name contains filter, most recently seen first.
+func (s *Store) Players(filter string, n int) ([]PlayerRow, error) {
+	rows, err := s.db.Query(`
+		SELECT name, key, wins, kills, deaths, cases, rounds, last_seen FROM players
+		WHERE name LIKE '%' || ? || '%' ORDER BY last_seen DESC LIMIT ?`, filter, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PlayerRow
+	for rows.Next() {
+		var p PlayerRow
+		if err := rows.Scan(&p.Name, &p.Key, &p.Wins, &p.Kills, &p.Deaths, &p.Cases, &p.Rounds, &p.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+var ErrNoPlayer = errors.New("no player with that name")
+
+// SetStat overwrites one leaderboard column for a player.
+func (s *Store) SetStat(name, column string, n int) error {
+	if !statColumns[column] {
+		return fmt.Errorf("unknown stat %q (use wins, kills, deaths, cases or rounds)", column)
+	}
+	return s.update(`UPDATE players SET `+column+` = ? WHERE name = ?`, n, name)
+}
+
+// ResetStats zeroes a player's stats but keeps their name and key.
+func (s *Store) ResetStats(name string) error {
+	return s.update(`UPDATE players SET wins = 0, kills = 0, deaths = 0, cases = 0, rounds = 0 WHERE name = ?`, name)
+}
+
+// Unbind frees a name from its SSH key; the next key to use it claims it.
+func (s *Store) Unbind(name string) error {
+	return s.update(`UPDATE players SET key = '' WHERE name = ?`, name)
+}
+
+// Delete forgets a player entirely.
+func (s *Store) Delete(name string) error {
+	return s.update(`DELETE FROM players WHERE name = ?`, name)
+}
+
+func (s *Store) update(query string, args ...any) error {
+	res, err := s.db.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNoPlayer
+	}
+	return nil
+}
+
+// WipeStats zeroes everyone's stats. Names stay bound to their keys.
+func (s *Store) WipeStats() (int64, error) {
+	res, err := s.db.Exec(`UPDATE players SET wins = 0, kills = 0, deaths = 0, cases = 0, rounds = 0`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// Info returns the number of players and the database size in bytes.
+func (s *Store) Info() (players, bytes int64, err error) {
+	if err = s.db.QueryRow(`SELECT COUNT(*) FROM players`).Scan(&players); err != nil {
+		return
+	}
+	err = s.db.QueryRow(`SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()`).Scan(&bytes)
+	return
+}
+
+// SQL runs a raw statement. Statements that return rows come back as a
+// header and string cells (at most limit rows); others report rows changed.
+func (s *Store) SQL(query string, limit int) (cols []string, cells [][]string, changed int64, err error) {
+	if !returnsRows(query) {
+		res, err := s.db.Exec(query)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		changed, _ = res.RowsAffected()
+		return nil, nil, changed, nil
+	}
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	defer rows.Close()
+	if cols, err = rows.Columns(); err != nil {
+		return nil, nil, 0, err
+	}
+	for rows.Next() && len(cells) < limit {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, nil, 0, err
+		}
+		row := make([]string, len(cols))
+		for i, v := range vals {
+			switch v := v.(type) {
+			case nil:
+				row[i] = "NULL"
+			case []byte:
+				row[i] = string(v)
+			default:
+				row[i] = fmt.Sprint(v)
+			}
+		}
+		cells = append(cells, row)
+	}
+	return cols, cells, 0, rows.Err()
+}
+
+func returnsRows(query string) bool {
+	f := strings.Fields(strings.ToLower(query))
+	if len(f) == 0 {
+		return false
+	}
+	switch f[0] {
+	case "select", "pragma", "with", "explain", "values":
+		return true
+	}
+	return strings.Contains(strings.ToLower(query), "returning")
 }
