@@ -171,6 +171,24 @@ func (g *Game) loop() {
 
 func (g *Game) Stop() { g.stopOnce.Do(func() { close(g.quit) }) }
 
+// Stopped reports whether the game has been shut down, e.g. by an admin.
+func (g *Game) Stopped() bool {
+	select {
+	case <-g.quit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Announce puts a message in the game's feed.
+func (g *Game) Announce(msg string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.pushFeed(msg)
+	g.publish()
+}
+
 func (g *Game) at(x, y int) int { return g.grid[y*g.W+x] }
 
 func (g *Game) set(x, y, id int) { g.grid[y*g.W+x] = id }
