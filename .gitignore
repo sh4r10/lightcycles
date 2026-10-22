@@ -1,2 +1,4 @@
 lightcycles
 .ssh/
+*.db
+*.db-*

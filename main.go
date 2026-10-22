@@ -14,20 +14,20 @@ import (
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
 	"github.com/charmbracelet/wish/activeterm"
 	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/charmbracelet/wish/logging"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 const usage = `Light Cycles: a multiplayer Tron arena for the terminal.
 
 Usage:
-  lightcycles serve [flags]         run a server (SSH on :2222, client port :2223)
-  lightcycles play [flags] HOST     join a server with the native client
+  lightcycles serve [flags]         run a server (SSH on :2222)
+  lightcycles play [flags] HOST     join a server with the built-in client
 
 Run "lightcycles serve -h" or "lightcycles play -h" for flags.
 Without a command, lightcycles runs "serve".
@@ -54,16 +54,27 @@ func serve(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	host := fs.String("host", "0.0.0.0", "address to listen on")
 	port := fs.String("port", "2222", "SSH port")
-	gamePort := fs.String("game-port", "2223", "port for the native client (empty disables it)")
 	keyPath := fs.String("key", ".ssh/lightcycles_ed25519", "host key path (created if missing)")
-	minCycles := fs.Int("min-cycles", 4, "fill each round with bots up to this many cycles (0 disables bots)")
+	dbPath := fs.String("db", "lightcycles.db", "SQLite leaderboard file (empty disables the leaderboard)")
 	_ = fs.Parse(args)
 
-	lobby := NewLobby(*minCycles)
+	var store *Store
+	if *dbPath != "" {
+		var err error
+		if store, err = OpenStore(*dbPath); err != nil {
+			log.Fatal("could not open leaderboard database", "path", *dbPath, "error", err)
+		}
+		defer store.Close()
+	}
+	lobby := NewLobby(store)
 
 	s, err := wish.NewServer(
 		wish.WithAddress(net.JoinHostPort(*host, *port)),
 		wish.WithHostKeyPath(*keyPath),
+		// Anyone may play. We accept any key so we can tie names to it, and
+		// fall back to keyboard-interactive (no prompts) for keyless clients.
+		wish.WithPublicKeyAuth(func(ssh.Context, ssh.PublicKey) bool { return true }),
+		wish.WithKeyboardInteractiveAuth(func(ssh.Context, gossh.KeyboardInteractiveChallenge) bool { return true }),
 		wish.WithMiddleware(
 			bubbletea.Middleware(func(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 				return handler(lobby, s)
@@ -75,15 +86,10 @@ func serve(args []string) {
 	if err != nil {
 		log.Fatal("could not create server", "error", err)
 	}
-	if *gamePort != "" {
-		if err := serveTCP(lobby, net.JoinHostPort(*host, *gamePort)); err != nil {
-			log.Fatal("could not listen for clients", "error", err)
-		}
-	}
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
-	log.Info("Light Cycles server listening", "host", *host, "ssh", *port, "client", *gamePort)
+	log.Info("Light Cycles server listening", "host", *host, "port", *port, "db", *dbPath)
 	go func() {
 		if err := s.ListenAndServe(); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
 			log.Error("server stopped", "error", err)
@@ -96,59 +102,20 @@ func serve(args []string) {
 	_ = s.Shutdown(ctx)
 }
 
-func play(args []string) {
-	fs := flag.NewFlagSet("play", flag.ExitOnError)
-	name := fs.String("name", os.Getenv("USER"), "your player name")
-	room := fs.String("room", "main", "room to join")
-	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "Usage: lightcycles play [flags] HOST[:PORT]   (port defaults to 2223)")
-		fs.PrintDefaults()
-	}
-	_ = fs.Parse(args)
-	if fs.NArg() != 1 {
-		fs.Usage()
-		os.Exit(2)
-	}
-	addr := fs.Arg(0)
-	if _, _, err := net.SplitHostPort(addr); err != nil {
-		addr = net.JoinHostPort(addr, "2223")
-	}
-
-	g, id, err := dial(addr, *name, *room)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "could not join:", err)
-		os.Exit(1)
-	}
-	r := lipgloss.NewRenderer(os.Stdout)
-	final, err := tea.NewProgram(newModel(r, g, id), tea.WithAltScreen()).Run()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	if m, ok := final.(model); ok && m.lost != nil {
-		fmt.Fprintln(os.Stderr, "lost connection to server:", m.lost)
-		os.Exit(1)
-	}
-}
-
-// handler runs once per SSH connection. The SSH username is the player's
-// name, and an optional command picks the room: `ssh -p 2222 -t host myroom`.
+// handler runs once per SSH connection and starts the player at the name
+// screen, prefilled with their SSH username.
 func handler(lobby *Lobby, s ssh.Session) (tea.Model, []tea.ProgramOption) {
-	room := "main"
-	if args := s.Command(); len(args) > 0 {
-		room = cleanName(args[0], "main")
+	var keyFP string
+	if k := s.PublicKey(); k != nil {
+		keyFP = gossh.FingerprintSHA256(k)
 	}
-	g, id, ok := lobby.Join(room, cleanName(s.User(), "player"))
-	if !ok {
-		wish.Fatalln(s, "That room is full (8 players). Try another: ssh -t <host> -p <port> some-room")
-		return nil, nil
-	}
+	sess := &session{}
 	go func() {
 		<-s.Context().Done()
-		lobby.Leave(g, id)
+		sess.close(lobby)
 	}()
 	r := bubbletea.MakeRenderer(s)
-	return newModel(r, g, id), []tea.ProgramOption{tea.WithAltScreen()}
+	return newApp(r, lobby, sess, s.User(), keyFP), []tea.ProgramOption{tea.WithAltScreen()}
 }
 
 func cleanName(s, fallback string) string {
@@ -158,8 +125,8 @@ func cleanName(s, fallback string) string {
 		}
 		return -1
 	}, s)
-	if r := []rune(s); len(r) > 12 {
-		s = string(r[:12])
+	if r := []rune(s); len(r) > 16 {
+		s = string(r[:16])
 	}
 	if s == "" {
 		return fallback
