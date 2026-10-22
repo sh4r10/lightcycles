@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 const maxGames = 50
@@ -19,7 +20,25 @@ type Lobby struct {
 	online map[string]bool // lower-cased names of signed-in players
 	kicks  map[string]func(reason string)
 	store  *Store
+	// draining is set once a newer server has taken over new connections:
+	// everyone here keeps playing, and is nudged to reconnect for the update.
+	draining atomic.Bool
 }
+
+const drainNotice = "Update ready! Reconnect whenever you like to get it."
+
+// Drain tells everyone on this server that a newer one is taking new
+// connections.
+func (l *Lobby) Drain() {
+	l.draining.Store(true)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, g := range l.games {
+		g.Announce(drainNotice)
+	}
+}
+
+func (l *Lobby) Draining() bool { return l.draining.Load() }
 
 func NewLobby(store *Store) *Lobby {
 	l := &Lobby{games: map[string]*Game{}, online: map[string]bool{}, kicks: map[string]func(string){}, store: store}

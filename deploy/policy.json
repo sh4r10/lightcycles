@@ -1,0 +1,15 @@
+{
+  "default": [{ "type": "reject" }],
+  "transports": {
+    "docker": {
+      "ghcr.io/sh4r10/lightcycles": [
+        {
+          "type": "sigstoreSigned",
+          "keyPath": "/home/lightcycles/.config/containers/cosign.pub",
+          "signedIdentity": { "type": "matchRepository" }
+        }
+      ]
+    },
+    "containers-storage": { "": [{ "type": "insecureAcceptAnything" }] }
+  }
+}

@@ -45,6 +45,22 @@ func play(args []string) {
 	}
 }
 
+// askPassword prompts for the server's password, or uses
+// $LIGHTCYCLES_PASSWORD when it is set.
+func askPassword() (string, error) {
+	if p := os.Getenv("LIGHTCYCLES_PASSWORD"); p != "" {
+		return p, nil
+	}
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		return "", errors.New("the server wants a password; set LIGHTCYCLES_PASSWORD")
+	}
+	fmt.Fprint(os.Stderr, "Password: ")
+	p, err := term.ReadPassword(fd)
+	fmt.Fprintln(os.Stderr)
+	return string(p), err
+}
+
 func configDir() (string, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
@@ -71,8 +87,13 @@ func runClient(addr, user string, mute bool) error {
 		user = "player"
 	}
 	client, err := gossh.Dial("tcp", addr, &gossh.ClientConfig{
-		User:            user,
-		Auth:            []gossh.AuthMethod{gossh.PublicKeys(kp.Signer())},
+		User: user,
+		// The key goes first; servers with a password ask for it if the key
+		// isn't on their allowlist.
+		Auth: []gossh.AuthMethod{
+			gossh.PublicKeys(kp.Signer()),
+			gossh.RetryableAuthMethod(gossh.PasswordCallback(askPassword), 3),
+		},
 		HostKeyCallback: hostKeys,
 		Timeout:         10 * time.Second,
 	})

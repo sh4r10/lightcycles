@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Blue/green updates for Light Cycles. Installed to /usr/local/sbin by
+# setup.sh and run as root every few minutes (lightcycles-update.timer).
+#
+# Two copies of the game unit exist: lightcycles-blue (host port 2301) and
+# lightcycles-green (2302). Public ports 22 and 2222 are NAT-redirected to
+# whichever is active. When a new signed image appears, the idle colour starts
+# on it, the redirect flips so new connections land there, and the old colour
+# is stopped. Stopping only makes it drain: connected players keep playing
+# (connection tracking keeps their traffic on the old one) and it exits once
+# they've all left, or after 30 minutes.
+#
+#   lightcycles-update           deploy a new image if there is one
+#   lightcycles-update status    show which colour is live
+set -euo pipefail
+
+image=ghcr.io/sh4r10/lightcycles:latest
+state=/var/lib/lightcycles-deploy/active
+declare -A port=([blue]=2301 [green]=2302)
+
+lc() { /usr/local/bin/lcctl "$@"; }
+log() { echo "lightcycles-update: $*"; }
+unit_state() { lc systemctl --user is-active "lightcycles-$1.service" 2>/dev/null || true; }
+running() { [ "$(unit_state "$1")" = active ]; }
+# busy covers starting and draining too.
+busy() { [[ $(unit_state "$1") =~ ^(active|activating|deactivating|reloading)$ ]]; }
+
+# route points the public ports at one colour's host port. Existing
+# connections keep their old destination; only new ones follow.
+route() {
+	local to=${port[$1]}
+	for ipt in iptables ip6tables; do
+		$ipt -t nat -N LIGHTCYCLES 2>/dev/null || true
+		$ipt -t nat -C PREROUTING -p tcp -m multiport --dports 22,2222 -j LIGHTCYCLES 2>/dev/null ||
+			$ipt -t nat -I PREROUTING -p tcp -m multiport --dports 22,2222 -j LIGHTCYCLES
+		# Replace the rule in place so there's no moment without one.
+		if $ipt -t nat -S LIGHTCYCLES | grep -q -- '-j REDIRECT'; then
+			$ipt -t nat -R LIGHTCYCLES 1 -p tcp -j REDIRECT --to-ports "$to"
+		else
+			$ipt -t nat -A LIGHTCYCLES -p tcp -j REDIRECT --to-ports "$to"
+		fi
+	done
+}
+
+listening() { ss -Htln "sport = :${port[$1]}" | grep -q .; }
+
+mkdir -p "$(dirname "$state")"
+active=$(cat "$state" 2>/dev/null || echo blue)
+idle=green
+[ "$active" = green ] && idle=blue
+
+if [ "${1:-}" = status ]; then
+	for c in blue green; do
+		mark=" "
+		[ "$c" = "$active" ] && mark="*"
+		echo "$mark $c (port ${port[$c]}): $(unit_state "$c")"
+	done
+	exit 0
+fi
+
+# The pull only succeeds for images signed by CI (see policy.json). If it
+# fails (registry down, unsigned image), carry on with the local copy.
+if ! latest=$(lc podman pull -q "$image"); then
+	log "pull failed; using the image already on this machine"
+	latest=$(lc podman image inspect --format '{{.Id}}' "$image")
+fi
+
+if running "$active"; then
+	current=$(lc podman inspect --format '{{.Image}}' "lightcycles-$active")
+	route "$active" # also restores the redirect after a reboot
+	if [ "$current" = "$latest" ]; then
+		exit 0
+	fi
+	if busy "$idle"; then
+		log "new image waiting, but lightcycles-$idle is still draining the previous update"
+		exit 0
+	fi
+	log "new image ${latest:0:12}, starting lightcycles-$idle"
+	next=$idle
+else
+	# Nothing live (first run or after a reboot): just start the active colour.
+	log "starting lightcycles-$active"
+	next=$active
+fi
+
+lc systemctl --user start "lightcycles-$next.service"
+for _ in $(seq 60); do
+	listening "$next" && break
+	sleep 1
+done
+if ! listening "$next"; then
+	log "lightcycles-$next didn't start listening; keeping the current version"
+	lc systemctl --user stop "lightcycles-$next.service" || true
+	exit 1
+fi
+
+route "$next"
+echo "$next" >"$state"
+chmod 644 "$state"
+if [ "$next" != "$active" ]; then
+	log "lightcycles-$next is live; lightcycles-$active is draining"
+	lc systemctl --user stop --no-block "lightcycles-$active.service"
+fi

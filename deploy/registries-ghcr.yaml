@@ -1,0 +1,4 @@
+# Tell podman to look for cosign signatures next to the image on GHCR.
+docker:
+  ghcr.io/sh4r10/lightcycles:
+    use-sigstore-attachments: true

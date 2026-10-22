@@ -53,6 +53,13 @@ func OpenStore(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// Backup writes a consistent copy of the database to dest, which must not
+// exist yet. It is safe to run while the server is using the database.
+func (s *Store) Backup(dest string) error {
+	_, err := s.db.Exec(`VACUUM INTO ?`, dest)
+	return err
+}
+
 var ErrNameClaimed = errors.New("that name belongs to another player's SSH key")
 
 // Claim signs a name in. A new name is bound to keyFP (if there is one).

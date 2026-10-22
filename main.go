@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -28,8 +31,9 @@ const usage = `Light Cycles: a multiplayer Tron arena for the terminal.
 Usage:
   lightcycles serve [flags]         run a server (SSH on :2222)
   lightcycles play [flags] HOST     join a server with the built-in client
+  lightcycles backup [flags]        copy the leaderboard database
 
-Run "lightcycles serve -h" or "lightcycles play -h" for flags.
+Run "lightcycles <command> -h" for flags.
 Without a command, lightcycles runs "serve".
 `
 
@@ -44,6 +48,8 @@ func main() {
 		serve(args)
 	case "play":
 		play(args)
+	case "backup":
+		backup(args)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -58,6 +64,10 @@ func serve(args []string) {
 	dbPath := fs.String("db", "lightcycles.db", "SQLite leaderboard file (empty disables the leaderboard)")
 	soundsDir := fs.String("sounds", "sounds", "folder of custom WAVs (e.g. fahhh-meme.wav) sent to built-in clients")
 	adminPassword := fs.String("admin-password", os.Getenv("LIGHTCYCLES_ADMIN_PASSWORD"), "password for the admin console (ssh admin@host); empty disables it. Defaults to $LIGHTCYCLES_ADMIN_PASSWORD")
+	allowKeys := fs.String("allow-keys", "", "authorized_keys file of players allowed in (empty lets anyone play); re-read on every login")
+	password := fs.String("password", os.Getenv("LIGHTCYCLES_PASSWORD"), "password players can join with (default $LIGHTCYCLES_PASSWORD; empty means none)")
+	drain := fs.Duration("drain", 30*time.Minute, "on SIGTERM, keep serving connected players this long before closing (new connections are refused)")
+	idle := fs.Duration("idle-timeout", 30*time.Minute, "drop connections with no traffic for this long (0 disables)")
 	_ = fs.Parse(args)
 
 	var store *Store
@@ -79,10 +89,8 @@ func serve(args []string) {
 	s, err := wish.NewServer(
 		wish.WithAddress(net.JoinHostPort(*host, *port)),
 		wish.WithHostKeyPath(*keyPath),
-		// Anyone may play. We accept any key so we can tie names to it, and
-		// fall back to keyboard-interactive (no prompts) for keyless clients.
-		wish.WithPublicKeyAuth(func(ssh.Context, ssh.PublicKey) bool { return true }),
-		wish.WithKeyboardInteractiveAuth(func(ssh.Context, gossh.KeyboardInteractiveChallenge) bool { return true }),
+		wish.WithIdleTimeout(*idle),
+		authOption(*allowKeys, *password),
 		wish.WithMiddleware(
 			bubbletea.Middleware(func(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 				return handler(lobby, s)
@@ -107,9 +115,114 @@ func serve(args []string) {
 		}
 	}()
 	<-done
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// A newer server takes new connections from here (see deploy/), so stop
+	// listening but let everyone connected finish, up to the drain limit.
+	log.Info("draining: refusing new connections", "max", *drain)
+	lobby.Drain()
+	go func() {
+		// A second ctrl+c (or SIGTERM) skips the drain.
+		<-done
+		_ = s.Close()
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), *drain)
 	defer cancel()
-	_ = s.Shutdown(ctx)
+	if err := s.Shutdown(ctx); err != nil {
+		log.Info("drain limit reached, closing remaining connections")
+		_ = s.Close()
+	}
+}
+
+// authOption decides who may connect. With no allowlist and no password
+// anyone may play: we accept any key so we can tie names to it, and fall back
+// to keyboard-interactive (no prompts) for keyless clients. Otherwise a
+// player gets in with a key from the allowlist or with the password; keys
+// that aren't listed are refused so the client moves on to the password.
+func authOption(allowKeys, password string) ssh.Option {
+	if allowKeys == "" && password == "" {
+		return func(s *ssh.Server) error {
+			s.PublicKeyHandler = func(ssh.Context, ssh.PublicKey) bool { return true }
+			s.KeyboardInteractiveHandler = func(ssh.Context, gossh.KeyboardInteractiveChallenge) bool { return true }
+			return nil
+		}
+	}
+	if allowKeys != "" {
+		if _, err := os.Stat(allowKeys); err != nil {
+			log.Fatal("could not read the player allowlist", "path", allowKeys, "error", err)
+		}
+	}
+	return func(s *ssh.Server) error {
+		s.PublicKeyHandler = func(_ ssh.Context, key ssh.PublicKey) bool {
+			if allowKeys == "" {
+				return false
+			}
+			ok, err := keyAllowed(allowKeys, key)
+			if err != nil {
+				log.Error("could not read the player allowlist", "path", allowKeys, "error", err)
+			}
+			return ok
+		}
+		if password != "" {
+			s.PasswordHandler = func(_ ssh.Context, given string) bool {
+				return subtle.ConstantTimeCompare([]byte(given), []byte(password)) == 1
+			}
+		}
+		return nil
+	}
+}
+
+// keyAllowed reports whether key is listed in an authorized_keys file. The
+// file is read on every login so players can be added without a restart.
+func keyAllowed(path string, key ssh.PublicKey) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	for len(data) > 0 {
+		var allowed gossh.PublicKey
+		allowed, _, _, data, err = gossh.ParseAuthorizedKey(data)
+		if err != nil {
+			// No more keys (blank lines and comments are skipped).
+			return false, nil
+		}
+		if ssh.KeysEqual(allowed, key) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func backup(args []string) {
+	fs := flag.NewFlagSet("backup", flag.ExitOnError)
+	dbPath := fs.String("db", "lightcycles.db", "SQLite leaderboard file")
+	dir := fs.String("dir", "backups", "folder to write the copy into")
+	keep := fs.Int("keep", 14, "number of backups to keep in the folder (0 keeps all)")
+	_ = fs.Parse(args)
+
+	store, err := OpenStore(*dbPath)
+	if err != nil {
+		log.Fatal("could not open leaderboard database", "path", *dbPath, "error", err)
+	}
+	defer store.Close()
+	if err := os.MkdirAll(*dir, 0o700); err != nil {
+		log.Fatal("could not create backup folder", "error", err)
+	}
+	dest := filepath.Join(*dir, "lightcycles-"+time.Now().UTC().Format("20060102-150405")+".db")
+	if err := store.Backup(dest); err != nil {
+		log.Fatal("backup failed", "error", err)
+	}
+	log.Info("backup written", "path", dest)
+
+	if *keep > 0 {
+		// Names sort by time, so everything before the newest keep is old.
+		old, _ := filepath.Glob(filepath.Join(*dir, "lightcycles-*.db"))
+		sort.Strings(old)
+		for len(old) > *keep {
+			if err := os.Remove(old[0]); err != nil {
+				log.Error("could not remove old backup", "path", old[0], "error", err)
+			}
+			old = old[1:]
+		}
+	}
 }
 
 // soundPackMiddleware answers `ssh host sounds` (no PTY) with the server's

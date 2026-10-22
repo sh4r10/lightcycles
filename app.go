@@ -415,6 +415,9 @@ func (a app) viewLobby() string {
 	if a.err != "" {
 		b.WriteString("\n" + st.err.Render(a.err) + "\n")
 	}
+	if a.lobby.Draining() {
+		b.WriteString("\n" + st.bold.Render(drainNotice) + "\n")
+	}
 	b.WriteString("\n" + st.key.Render("↑↓") + st.dim.Render(" pick · ") + st.key.Render("enter") + st.dim.Render(" join · ") +
 		st.key.Render("n") + st.dim.Render(" host a new game · ") + st.key.Render("l") + st.dim.Render(" leaderboard · ") +
 		st.key.Render("q") + st.dim.Render(" quit"))

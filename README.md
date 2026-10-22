@@ -115,9 +115,18 @@ go run . serve -port 2222 -db lightcycles.db -key .ssh/lightcycles_ed25519
 go test ./...
 ```
 
-A host key is generated on first run. To host it publicly, run the binary on
-any VPS and open the SSH port. Using port 22 means people can drop `-p`, but
-move your admin sshd elsewhere first.
+A host key is generated on first run. To gate the game, `-password` (or
+`$LIGHTCYCLES_PASSWORD`) sets a password players can join with, and
+`-allow-keys FILE` lets in the public keys in an authorized_keys-style file
+(re-read on every login) without one. With either set, other keys are
+refused. On SIGTERM the server drains: it stops taking new connections
+but lets connected players finish, for up to `-drain` (30 minutes).
+`lightcycles backup -db lightcycles.db -dir backups` writes a consistent
+copy of the leaderboard while the server is running.
+
+To host it, see [deploy/DEPLOY.md](deploy/DEPLOY.md). It covers a hardened VM
+running the ko-built image under rootless Podman, which updates itself from
+signed CI builds.
 
 ## Admin console
 
@@ -160,3 +169,4 @@ no player can take it.
 - `sound.go`: sound cues, synthesised sounds and the client's audio player
 - `admin.go`: the admin console (`ssh admin@host`)
 - `main.go`: commands and the Wish SSH server
+- `deploy/`: container unit, host hardening script and deploy guide

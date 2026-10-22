@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  # Builds the server image with ko, pushes it to GHCR and signs it. The
+  # server pulls new images itself (podman auto-update) and refuses any image
+  # not signed with this key, so CI never needs access to the server.
+  image:
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Logs in to ghcr.io and sets KO_DOCKER_REPO=ghcr.io/sh4r10/lightcycles.
+      - uses: ko-build/setup-ko@v0.9
+      # Podman reads cosign's classic ".sig" attachments; cosign v3 writes a
+      # new bundle format by default, so stay on v2.
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.6.5
+      - name: Build and push
+        run: ko build --bare --tags latest,${{ github.sha }} --image-refs ref.txt .
+      - name: Sign
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        # No transparency log upload: the repo is private, and the server
+        # checks the signature against our own public key, not Rekor.
+        run: cosign sign --yes --recursive --tlog-upload=false --key env://COSIGN_PRIVATE_KEY "$(cat ref.txt)"
