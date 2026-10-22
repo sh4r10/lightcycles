@@ -7,7 +7,7 @@ signature, and hands over to it without dropping anyone who's playing (see
 [Updates](#updates-without-dropping-players)).
 
 ```
-push to main ──► Actions: test → ko build → push to ghcr.io → cosign sign
+push to main ──► Actions: test → ko build → push to Docker Hub → cosign sign
                                                      │
 VM (rootless podman) ◄── pull every 5 min, reject unsigned ◄┘
 ```
@@ -24,8 +24,8 @@ holds no SSH keys for it.
 | Network | `ufw` denies all incoming traffic except admin SSH (rate-limited) and the game. Public ports 22 and 2222 are forwarded to the live game container (host port 2301 or 2302), so `ssh host` lands in the game. Other ports stay open only if you pass `--allow`. |
 | Game process | Runs in a container owned by a separate `lightcycles` user that has no login shell and no sudo. Inside the container it runs as uid 65532 with every capability dropped, a read-only filesystem, no privilege escalation, and limits of 512 MB memory, 1 CPU and 256 processes. The image is distroless: no shell, no package manager, just the binary. |
 | Game access | The game's SSH server only runs the game, never a shell or other commands. Players get in either with a key listed in `~lightcycles/players` or with the game password, which setup.sh asks for and stores in `~lightcycles/lightcycles.env` (mode 600, not in the repo). Players who use the password don't get their name locked to a key. Idle connections drop after 30 minutes. |
-| Supply chain | The VM only accepts `ghcr.io/sh4r10/lightcycles` images signed with this repo's cosign key, and rejects images from anywhere else. |
-| Secrets | Nothing secret is in the repo. The cosign private key lives in GitHub secrets. The registry token on the VM is read-only (`read:packages`) and stored mode 600 in the `lightcycles` user's home. |
+| Supply chain | The VM only accepts images from its configured repo (`--repo`, default `docker.io/sh4r10/lightcycles`) that are signed with this repo's cosign key, and rejects images from anywhere else. A leaked Docker Hub token can push an image but can't get it run. |
+| Secrets | Nothing secret is in the repo. The cosign private key and the Docker Hub push token live in GitHub secrets. The VM's Docker Hub token is read-only and stored mode 600 in the `lightcycles` user's home, next to the game and admin passwords. |
 
 So a stranger with the address can't get a shell on the box. A bug in the
 game would leave an attacker inside a locked-down container as an
@@ -33,19 +33,26 @@ unprivileged user with access only to the game's data.
 
 ## One-time setup
 
-### 1. Signing key (on your laptop)
+### 1. Docker Hub and signing key (on your laptop)
 
-Install [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) v2, then:
+1. Create the Docker Hub repository `lightcycles` (private or public both
+   work), plus two access tokens:
+   - **Read & Write**, for CI
+   - **Read-only**, for the VM
+2. In the GitHub repo settings, add the variable `DOCKERHUB_USERNAME` and
+   the secret `DOCKERHUB_TOKEN` (the Read & Write token).
+3. Install [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
+   v2, then generate the signing key:
 
-```sh
-export GITHUB_TOKEN=<a token that can write repo secrets>
-cosign generate-key-pair github://sh4r10/lightcycles
-mv cosign.pub deploy/cosign.pub && git add deploy/cosign.pub && git commit -m "Add image signing key" && git push
-```
+   ```sh
+   export GITHUB_TOKEN=<a token that can write repo secrets>
+   cosign generate-key-pair github://sh4r10/lightcycles
+   mv cosign.pub deploy/cosign.pub && git add deploy/cosign.pub && git commit -m "Add image signing key" && git push
+   ```
 
-This stores `COSIGN_PRIVATE_KEY` and `COSIGN_PASSWORD` as repo secrets and
-gives you the public key to commit. The push to `main` builds and signs the
-first image. Check that the **CI** workflow's `image` job is green.
+   This stores `COSIGN_PRIVATE_KEY` and `COSIGN_PASSWORD` as repo secrets.
+   The next push to `main` builds and signs an image. Check that the **CI**
+   workflow's `image` job is green.
 
 ### 2. The VM
 
@@ -55,7 +62,7 @@ newer. Copy this folder over and run the script as your admin user, not root:
 ```sh
 scp -r deploy you@your-vm:lightcycles-deploy
 ssh you@your-vm
-sudo ./lightcycles-deploy/setup.sh --ssh-port 2200   # add --allow 443 etc. for other services
+sudo ./lightcycles-deploy/setup.sh --ssh-port 2200 --repo docker.io/<you>/lightcycles
 ```
 
 The script opens the new admin port in the firewall first, then moves sshd
@@ -63,8 +70,8 @@ to it and checks that sshd is listening there. If it isn't, it moves sshd
 back. Only after that does the game take over 22.
 
 The script asks before enabling the firewall and lists anything else
-listening that would be blocked. It also asks for a GitHub token with only
-the `read:packages` scope so it can pull the private image.
+listening that would be blocked. It also asks for the game and admin
+passwords, and for a read-only Docker Hub access token to pull the image.
 
 **Before you close that SSH session**, open a second terminal and check that
 you can still log in with `ssh -p 2200 you@your-vm`. Root login and
@@ -89,6 +96,11 @@ re-read on every login, so you don't need to restart:
 ```sh
 sudo nano ~lightcycles/players
 ```
+
+The admin console (`ssh -t admin@your-vm`) uses
+`LIGHTCYCLES_ADMIN_PASSWORD` from the same env file. You get past the
+game's gate first, with a listed key or the game password, and then the
+console asks for the admin password.
 
 To change the password, edit `~lightcycles/lightcycles.env`. It takes
 effect at the next deploy. Leaving the password empty and dropping
@@ -131,6 +143,11 @@ Trade-offs:
   disconnected and has to rejoin.
 - If another update lands while the old version is still draining, it waits
   for the next 5-minute check after the drain ends.
+- Checking every 5 minutes costs almost nothing against Docker Hub's pull
+  limit (200 pulls per 6 hours for a signed-in free account, 100 anonymous).
+  `podman pull --policy newer` compares digests first, and Docker Hub
+  doesn't count those version checks. Only an actual new image counts,
+  roughly one pull plus its signature.
 - If the new version fails to start listening within a minute, it's stopped
   and the current one stays live. A version that starts but misbehaves
   needs a fix pushed to `main`, and that rolls forward the same way.

@@ -2,6 +2,7 @@
 # the rootless "lightcycles" user at ~/.config/containers/systemd/:
 # lightcycles-blue (host port 2301) and lightcycles-green (2302).
 # lightcycles-update starts them and decides which one gets new players.
+# @REPO@ is the image repository, e.g. docker.io/sh4r10/lightcycles.
 [Unit]
 Description=Light Cycles game server (@COLOR@)
 Wants=network-online.target
@@ -9,15 +10,16 @@ After=network-online.target
 
 [Container]
 ContainerName=lightcycles-@COLOR@
-Image=ghcr.io/sh4r10/lightcycles:latest
+Image=@REPO@:latest
 # The leaderboard, host key, backups and custom sounds live in this volume,
 # shared by both colours (SQLite runs in WAL mode, so both can have it open).
 # The player allowlist is mounted read-only from the host. Keys listed there
 # get in without the password.
 Volume=lightcycles-data:/data:U,Z
 Volume=%h/players:/config/players:ro,Z
-# Players without a listed key join with the password in this file
-# (LIGHTCYCLES_PASSWORD=...). setup.sh creates it; it isn't in the repo.
+# Secrets, created by setup.sh and kept out of the repo:
+#   LIGHTCYCLES_PASSWORD        players without a listed key join with this
+#   LIGHTCYCLES_ADMIN_PASSWORD  enables the admin console (ssh admin@host)
 EnvironmentFile=%h/lightcycles.env
 Exec=serve -db /data/lightcycles.db -key /data/host_ed25519 -sounds /data/sounds -allow-keys /config/players
 # lightcycles-update forwards public ports 22 and 2222 here when this

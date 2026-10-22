@@ -14,7 +14,9 @@
 #   lightcycles-update status    show which colour is live
 set -euo pipefail
 
-image=ghcr.io/sh4r10/lightcycles:latest
+# The image comes from the installed unit, so it's set in one place.
+lc_home=$(getent passwd lightcycles | cut -d: -f6)
+image=$(sed -n 's/^Image=//p' "$lc_home/.config/containers/systemd/lightcycles-blue.container")
 state=/var/lib/lightcycles-deploy/active
 declare -A port=([blue]=2301 [green]=2302)
 
@@ -58,12 +60,14 @@ if [ "${1:-}" = status ]; then
 	exit 0
 fi
 
-# The pull only succeeds for images signed by CI (see policy.json). If it
-# fails (registry down, unsigned image), carry on with the local copy.
-if ! latest=$(lc podman pull -q "$image"); then
+# --policy newer only downloads when the registry's digest differs, which
+# it checks with a HEAD request (those don't count against Docker Hub's
+# pull limit). The pull only succeeds for images signed by CI (see
+# policy.json). If it fails (registry down, unsigned image), carry on with
+# the local copy.
+lc podman pull -q --policy newer "$image" >/dev/null ||
 	log "pull failed; using the image already on this machine"
-	latest=$(lc podman image inspect --format '{{.Id}}' "$image")
-fi
+latest=$(lc podman image inspect --format '{{.Id}}' "$image")
 
 if running "$active"; then
 	current=$(lc podman inspect --format '{{.Image}}' "lightcycles-$active")

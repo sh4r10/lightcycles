@@ -9,6 +9,7 @@
 #   sudo ./setup.sh [--ssh-port PORT] [--admin USER] [--allow PORT]... [--yes]
 #
 #   --ssh-port N   port to move admin SSH to, freeing 22 for the game (default 2200)
+#   --repo REPO    image repository CI pushes to (default docker.io/sh4r10/lightcycles)
 #   --admin USER   the account you log in with (default: whoever ran sudo)
 #   --allow PORT   another TCP port to keep open (e.g. --allow 443)
 #   --yes          don't ask before enabling the firewall
@@ -19,11 +20,13 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 admin=${SUDO_USER:-}
 ssh_port=2200
+repo=docker.io/sh4r10/lightcycles
 extra_ports=()
 assume_yes=false
 while [ $# -gt 0 ]; do
 	case $1 in
 	--ssh-port) ssh_port=$2; shift 2 ;;
+	--repo) repo=$2; shift 2 ;;
 	--admin) admin=$2; shift 2 ;;
 	--allow) extra_ports+=("$2"); shift 2 ;;
 	--yes) assume_yes=true; shift ;;
@@ -171,13 +174,16 @@ cfg=$lc_home/.config
 install -d -o lightcycles -g lightcycles "$cfg" "$cfg/containers" "$cfg/containers/systemd" \
 	"$cfg/containers/registries.d" "$cfg/systemd" "$cfg/systemd/user"
 inst() { install -m 644 -o lightcycles -g lightcycles "$here/$1" "$2"; }
-for color in blue:2301 green:2302; do
-	sed "s/@COLOR@/${color%:*}/g; s/@PORT@/${color#*:}/g" "$here/lightcycles.container" \
-		>"$cfg/containers/systemd/lightcycles-${color%:*}.container"
-	chown lightcycles:lightcycles "$cfg/containers/systemd/lightcycles-${color%:*}.container"
-done
-inst policy.json "$cfg/containers/policy.json"
-inst registries-ghcr.yaml "$cfg/containers/registries.d/ghcr.yaml"
+# Files with @REPO@ (and the unit's @COLOR@/@PORT@) get filled in.
+render() {
+	sed "s|@REPO@|$repo|g; s|@COLOR@|${3:-}|g; s|@PORT@|${4:-}|g" "$here/$1" >"$2"
+	chown lightcycles:lightcycles "$2"
+	chmod 644 "$2"
+}
+render lightcycles.container "$cfg/containers/systemd/lightcycles-blue.container" blue 2301
+render lightcycles.container "$cfg/containers/systemd/lightcycles-green.container" green 2302
+render policy.json "$cfg/containers/policy.json"
+render registries.yaml "$cfg/containers/registries.d/lightcycles.yaml"
 inst cosign.pub "$cfg/containers/cosign.pub"
 inst lightcycles-backup.service "$cfg/systemd/user/lightcycles-backup.service"
 inst lightcycles-backup.timer "$cfg/systemd/user/lightcycles-backup.timer"
@@ -192,20 +198,24 @@ fi
 if [ ! -e "$lc_home/lightcycles.env" ]; then
 	read -r -s -p "Game password players join with (empty for none): " game_pw
 	echo
-	# The file is read by systemd, not a shell, so no quoting is needed.
-	printf 'LIGHTCYCLES_PASSWORD=%s\n' "$game_pw" >"$lc_home/lightcycles.env"
+	read -r -s -p "Admin console password for ssh admin@host (empty disables it): " admin_pw
+	echo
+	# The file is read by podman, not a shell, so no quoting is needed.
+	printf 'LIGHTCYCLES_PASSWORD=%s\nLIGHTCYCLES_ADMIN_PASSWORD=%s\n' "$game_pw" "$admin_pw" >"$lc_home/lightcycles.env"
 	chown lightcycles:lightcycles "$lc_home/lightcycles.env"
 	chmod 600 "$lc_home/lightcycles.env"
 fi
 
-say "Logging in to GitHub's container registry"
+say "Logging in to ${repo%%/*}"
 if [ ! -s "$cfg/containers/auth.json" ]; then
-	echo "The image is private. Create a classic GitHub token with only the read:packages scope"
-	echo "(https://github.com/settings/tokens/new?scopes=read:packages) and paste it here."
-	read -r -p "GitHub username: " gh_user
-	read -r -s -p "Token: " gh_token
+	# Needed for a private repo, and on Docker Hub it also lifts the
+	# anonymous pull limit.
+	echo "Create a Docker Hub access token with Read-only access"
+	echo "(https://app.docker.com/settings/personal-access-tokens) and paste it here."
+	read -r -p "Docker Hub username: " reg_user
+	read -r -s -p "Token: " reg_token
 	echo
-	printf '%s' "$gh_token" | as_lc podman login ghcr.io -u "$gh_user" --password-stdin \
+	printf '%s' "$reg_token" | as_lc podman login "${repo%%/*}" -u "$reg_user" --password-stdin \
 		--authfile "$cfg/containers/auth.json"
 	chmod 600 "$cfg/containers/auth.json"
 fi
