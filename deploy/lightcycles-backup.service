@@ -1,0 +1,6 @@
+[Unit]
+Description=Back up the Light Cycles leaderboard
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/podman exec lightcycles /ko-app/lightcycles backup -db /data/lightcycles.db -dir /data/backups -keep 14

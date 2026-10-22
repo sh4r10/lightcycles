@@ -115,9 +115,14 @@ go run . serve -port 2222 -db lightcycles.db -key .ssh/lightcycles_ed25519
 go test ./...
 ```
 
-A host key is generated on first run. To host it publicly, run the binary on
-any VPS and open the SSH port. Using port 22 means people can drop `-p`, but
-move your admin sshd elsewhere first.
+A host key is generated on first run. `-allow-keys FILE` limits the game to
+the public keys in an authorized_keys-style file (re-read on every login),
+and `lightcycles backup -db lightcycles.db -dir backups` writes a consistent
+copy of the leaderboard while the server is running.
+
+To host it, see [deploy/DEPLOY.md](deploy/DEPLOY.md). It covers a hardened VM
+running the ko-built image under rootless Podman, which updates itself from
+signed CI builds.
 
 ## Layout
 
@@ -130,3 +135,4 @@ move your admin sshd elsewhere first.
 - `flavor.go`: Team 7 bot personas and feed lines
 - `sound.go`: sound cues, synthesised sounds and the client's audio player
 - `main.go`: commands and the Wish SSH server
+- `deploy/`: container unit, host hardening script and deploy guide

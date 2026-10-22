@@ -1,0 +1,38 @@
+# Podman Quadlet unit for the game server. setup.sh installs it for the
+# rootless "lightcycles" user at ~/.config/containers/systemd/.
+[Unit]
+Description=Light Cycles game server
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=lightcycles
+Image=ghcr.io/sh4r10/lightcycles:latest
+# podman-auto-update pulls new images (only ones signed by CI, see
+# policy.json) and rolls back if the new one fails to start.
+AutoUpdate=registry
+# The leaderboard, host key, backups and custom sounds live in this volume.
+# The player allowlist is mounted read-only from the host; drop -allow-keys
+# to let anyone play.
+Volume=lightcycles-data:/data:U,Z
+Volume=%h/players:/config/players:ro,Z
+Exec=serve -db /data/lightcycles.db -key /data/host_ed25519 -sounds /data/sounds -allow-keys /config/players
+PublishPort=2222:2222
+LogDriver=journald
+
+# Lock the container down: the image has no shell, runs as uid 65532, and
+# gets no capabilities, no writable root filesystem and no privilege
+# escalation.
+User=65532:65532
+ReadOnly=true
+DropCapability=ALL
+NoNewPrivileges=true
+PodmanArgs=--memory=512m --pids-limit=256 --cpus=1
+
+[Service]
+Restart=always
+# The first start pulls the image.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
