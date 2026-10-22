@@ -84,8 +84,9 @@ mute, or pass `-mute`.
 **Bundled sounds.** Drop WAVs named after a sound into `soundpack/`
 (for example the real FAHHH meme as `soundpack/fahhh-meme.wav`) and run
 `go build`: they're compiled into the binary, played by its client, and
-sent by its server to every built-in client. The folder's WAVs are
-gitignored so the clip stays out of the public repo.
+sent by its server to every built-in client. The real FAHHH meme
+(`soundpack/fahhh-meme.wav`) ships this way, so `go install` builds play it
+when someone else takes you out.
 
 **Server sounds.** Whoever runs the server can put WAVs named after the
 sounds (for example the real FAHHH meme clip as `fahhh-meme.wav`) in a
