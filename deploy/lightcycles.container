@@ -2,7 +2,7 @@
 # the rootless "lightcycles" user at ~/.config/containers/systemd/:
 # lightcycles-blue (host port 2301) and lightcycles-green (2302).
 # lightcycles-update starts them and decides which one gets new players.
-# @REPO@ is the image repository, e.g. docker.io/sh4r10/lightcycles.
+# @REPO@ is the image repository, e.g. docker.io/iamsh4r10/lightcycles.
 [Unit]
 Description=Light Cycles game server (@COLOR@)
 Wants=network-online.target

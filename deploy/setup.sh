@@ -9,7 +9,7 @@
 #   sudo ./setup.sh [--ssh-port PORT] [--admin USER] [--allow PORT]... [--yes]
 #
 #   --ssh-port N   port to move admin SSH to, freeing 22 for the game (default 2200)
-#   --repo REPO    image repository CI pushes to (default docker.io/sh4r10/lightcycles)
+#   --repo REPO    image repository CI pushes to (default docker.io/iamsh4r10/lightcycles)
 #   --admin USER   the account you log in with (default: whoever ran sudo)
 #   --allow PORT   another TCP port to keep open (e.g. --allow 443)
 #   --yes          don't ask before enabling the firewall
@@ -20,7 +20,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 admin=${SUDO_USER:-}
 ssh_port=2200
-repo=docker.io/sh4r10/lightcycles
+repo=docker.io/iamsh4r10/lightcycles
 extra_ports=()
 assume_yes=false
 while [ $# -gt 0 ]; do

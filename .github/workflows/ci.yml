@@ -75,4 +75,6 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         # No transparency log upload: the server checks the signature against
         # our own public key, not Rekor, and this keeps the repo name private.
-        run: cosign sign --yes --recursive --tlog-upload=false --key env://COSIGN_PRIVATE_KEY "$(cat ref.txt)"
+        # ref.txt lists the multi-arch index first, then each platform image;
+        # signing the index with --recursive covers them all.
+        run: cosign sign --yes --recursive --tlog-upload=false --key env://COSIGN_PRIVATE_KEY "$(head -n1 ref.txt)"
