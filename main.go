@@ -65,7 +65,7 @@ func serve(args []string) {
 	soundsDir := fs.String("sounds", "sounds", "folder of custom WAVs (e.g. fahhh-meme.wav) sent to built-in clients")
 	adminPassword := fs.String("admin-password", os.Getenv("LIGHTCYCLES_ADMIN_PASSWORD"), "password for the admin console (ssh admin@host); empty disables it. Defaults to $LIGHTCYCLES_ADMIN_PASSWORD")
 	allowKeys := fs.String("allow-keys", "", "authorized_keys file of players allowed in (empty lets anyone play); re-read on every login")
-	password := fs.String("password", os.Getenv("LIGHTCYCLES_PASSWORD"), "password players can join with (default $LIGHTCYCLES_PASSWORD; empty means none)")
+	password := fs.String("join-password", os.Getenv("LIGHTCYCLES_JOIN_PASSWORD"), "password players can join with; empty means none. Defaults to $LIGHTCYCLES_JOIN_PASSWORD")
 	drain := fs.Duration("drain", 30*time.Minute, "on SIGTERM, keep serving connected players this long before closing (new connections are refused)")
 	idle := fs.Duration("idle-timeout", 30*time.Minute, "drop connections with no traffic for this long (0 disables)")
 	_ = fs.Parse(args)

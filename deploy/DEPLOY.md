@@ -87,7 +87,7 @@ Otherwise it will block the new admin port.
 
 Players join with `ssh yourname@your-vm` and enter the game password when
 asked. The built-in client (`lightcycles play your-vm`)
-prompts too, or reads `$LIGHTCYCLES_PASSWORD`.
+prompts too, or reads `$LIGHTCYCLES_JOIN_PASSWORD`.
 
 To skip the password and lock their name to their key, add a player's
 public key (`~/.ssh/id_ed25519.pub`) to the allowlist, one per line. It's

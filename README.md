@@ -115,8 +115,8 @@ go run . serve -port 2222 -db lightcycles.db -key .ssh/lightcycles_ed25519
 go test ./...
 ```
 
-A host key is generated on first run. To gate the game, `-password` (or
-`$LIGHTCYCLES_PASSWORD`) sets a password players can join with, and
+A host key is generated on first run. To gate the game, `-join-password` (or
+`$LIGHTCYCLES_JOIN_PASSWORD`) sets a password players can join with, and
 `-allow-keys FILE` lets in the public keys in an authorized_keys-style file
 (re-read on every login) without one. With either set, other keys are
 refused. On SIGTERM the server drains: it stops taking new connections

@@ -18,7 +18,7 @@ Image=@REPO@:latest
 Volume=lightcycles-data:/data:U,Z
 Volume=%h/players:/config/players:ro,Z
 # Secrets, created by setup.sh and kept out of the repo:
-#   LIGHTCYCLES_PASSWORD        players without a listed key join with this
+#   LIGHTCYCLES_JOIN_PASSWORD   players without a listed key join with this
 #   LIGHTCYCLES_ADMIN_PASSWORD  enables the admin console (ssh admin@host)
 EnvironmentFile=%h/lightcycles.env
 Exec=serve -db /data/lightcycles.db -key /data/host_ed25519 -sounds /data/sounds -allow-keys /config/players

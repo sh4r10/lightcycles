@@ -46,14 +46,14 @@ func play(args []string) {
 }
 
 // askPassword prompts for the server's password, or uses
-// $LIGHTCYCLES_PASSWORD when it is set.
+// $LIGHTCYCLES_JOIN_PASSWORD when it is set.
 func askPassword() (string, error) {
-	if p := os.Getenv("LIGHTCYCLES_PASSWORD"); p != "" {
+	if p := os.Getenv("LIGHTCYCLES_JOIN_PASSWORD"); p != "" {
 		return p, nil
 	}
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
-		return "", errors.New("the server wants a password; set LIGHTCYCLES_PASSWORD")
+		return "", errors.New("the server wants a password; set LIGHTCYCLES_JOIN_PASSWORD")
 	}
 	fmt.Fprint(os.Stderr, "Password: ")
 	p, err := term.ReadPassword(fd)

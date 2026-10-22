@@ -201,7 +201,7 @@ if [ ! -e "$lc_home/lightcycles.env" ]; then
 	read -r -s -p "Admin console password for ssh admin@host (empty disables it): " admin_pw
 	echo
 	# The file is read by podman, not a shell, so no quoting is needed.
-	printf 'LIGHTCYCLES_PASSWORD=%s\nLIGHTCYCLES_ADMIN_PASSWORD=%s\n' "$game_pw" "$admin_pw" >"$lc_home/lightcycles.env"
+	printf 'LIGHTCYCLES_JOIN_PASSWORD=%s\nLIGHTCYCLES_ADMIN_PASSWORD=%s\n' "$game_pw" "$admin_pw" >"$lc_home/lightcycles.env"
 	chown lightcycles:lightcycles "$lc_home/lightcycles.env"
 	chmod 600 "$lc_home/lightcycles.env"
 fi
