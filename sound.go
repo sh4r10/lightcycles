@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"embed"
 	"encoding/binary"
 	"io"
 	"math"
@@ -144,8 +145,22 @@ func (p *player) writeDefaults() {
 	dir := filepath.Join(p.dir, "default")
 	_ = os.MkdirAll(dir, 0o755)
 	for _, s := range allSounds {
-		_ = os.WriteFile(filepath.Join(dir, string(s)+".wav"), wav(synth(s)), 0o644)
+		data, ok := bundled(s)
+		if !ok {
+			data = wav(synth(s))
+		}
+		_ = os.WriteFile(filepath.Join(dir, string(s)+".wav"), data, 0o644)
 	}
+}
+
+// soundpack holds WAVs compiled into this binary (see soundpack/README.md).
+//
+//go:embed soundpack
+var soundpack embed.FS
+
+func bundled(s Sound) ([]byte, bool) {
+	data, err := soundpack.ReadFile("soundpack/" + string(s) + ".wav")
+	return data, err == nil && len(data) <= maxSoundSize
 }
 
 const sampleRate = 22050
@@ -324,10 +339,13 @@ const maxSoundSize = 4 << 20
 func writeSoundPack(w io.Writer, dir string) error {
 	tw := tar.NewWriter(w)
 	for _, s := range allSounds {
-		path := filepath.Join(dir, string(s)+".wav")
-		data, err := os.ReadFile(path)
+		// The server's sounds folder wins over sounds bundled in the binary.
+		data, err := os.ReadFile(filepath.Join(dir, string(s)+".wav"))
 		if err != nil || len(data) > maxSoundSize {
-			continue
+			var ok bool
+			if data, ok = bundled(s); !ok {
+				continue
+			}
 		}
 		if err := tw.WriteHeader(&tar.Header{Name: string(s) + ".wav", Mode: 0o644, Size: int64(len(data))}); err != nil {
 			return err
