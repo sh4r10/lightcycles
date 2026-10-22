@@ -1,17 +1,17 @@
-# Podman Quadlet unit for the game server. setup.sh installs it for the
-# rootless "lightcycles" user at ~/.config/containers/systemd/.
+# Podman Quadlet unit for the game server. setup.sh installs two copies for
+# the rootless "lightcycles" user at ~/.config/containers/systemd/:
+# lightcycles-blue (host port 2301) and lightcycles-green (2302).
+# lightcycles-update starts them and decides which one gets new players.
 [Unit]
-Description=Light Cycles game server
+Description=Light Cycles game server (@COLOR@)
 Wants=network-online.target
 After=network-online.target
 
 [Container]
-ContainerName=lightcycles
+ContainerName=lightcycles-@COLOR@
 Image=ghcr.io/sh4r10/lightcycles:latest
-# podman-auto-update pulls new images (only ones signed by CI, see
-# policy.json) and rolls back if the new one fails to start.
-AutoUpdate=registry
-# The leaderboard, host key, backups and custom sounds live in this volume.
+# The leaderboard, host key, backups and custom sounds live in this volume,
+# shared by both colours (SQLite runs in WAL mode, so both can have it open).
 # The player allowlist is mounted read-only from the host. Keys listed there
 # get in without the password.
 Volume=lightcycles-data:/data:U,Z
@@ -20,8 +20,9 @@ Volume=%h/players:/config/players:ro,Z
 # (LIGHTCYCLES_PASSWORD=...). setup.sh creates it; it isn't in the repo.
 EnvironmentFile=%h/lightcycles.env
 Exec=serve -db /data/lightcycles.db -key /data/host_ed25519 -sounds /data/sounds -allow-keys /config/players
-# The host firewall forwards port 22 here (see setup.sh).
-PublishPort=2222:2222
+# lightcycles-update forwards public ports 22 and 2222 here when this
+# colour is live.
+PublishPort=@PORT@:2222
 LogDriver=journald
 
 # Lock the container down: the image has no shell, runs as uid 65532, and
@@ -33,10 +34,12 @@ DropCapability=ALL
 NoNewPrivileges=true
 PodmanArgs=--memory=512m --pids-limit=256 --cpus=1
 
+# Stopping drains: players already connected keep playing until they leave,
+# for up to 30 minutes (the server's -drain default), before podman kills it.
+PodmanArgs=--stop-timeout=1860
+
 [Service]
-Restart=always
+Restart=on-failure
 # The first start pulls the image.
 TimeoutStartSec=300
-
-[Install]
-WantedBy=default.target
+TimeoutStopSec=1900

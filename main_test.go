@@ -130,3 +130,19 @@ func newSigner(t *testing.T) gossh.Signer {
 	}
 	return s
 }
+
+func TestDrainAnnounces(t *testing.T) {
+	l := NewLobby(nil)
+	l.Drain()
+	if !l.Draining() {
+		t.Fatal("lobby should report draining")
+	}
+	for _, g := range l.games {
+		g.mu.Lock()
+		feed := g.feed
+		g.mu.Unlock()
+		if len(feed) == 0 || feed[len(feed)-1] != drainNotice {
+			t.Errorf("game %q feed = %q, want the update notice last", g.Settings.Name, feed)
+		}
+	}
+}

@@ -65,6 +65,7 @@ func serve(args []string) {
 	soundsDir := fs.String("sounds", "sounds", "folder of custom WAVs (e.g. fahhh-meme.wav) sent to built-in clients")
 	allowKeys := fs.String("allow-keys", "", "authorized_keys file of players allowed in (empty lets anyone play); re-read on every login")
 	password := fs.String("password", os.Getenv("LIGHTCYCLES_PASSWORD"), "password players can join with (default $LIGHTCYCLES_PASSWORD; empty means none)")
+	drain := fs.Duration("drain", 30*time.Minute, "on SIGTERM, keep serving connected players this long before closing (new connections are refused)")
 	idle := fs.Duration("idle-timeout", 30*time.Minute, "drop connections with no traffic for this long (0 disables)")
 	_ = fs.Parse(args)
 
@@ -106,9 +107,21 @@ func serve(args []string) {
 		}
 	}()
 	<-done
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// A newer server takes new connections from here (see deploy/), so stop
+	// listening but let everyone connected finish, up to the drain limit.
+	log.Info("draining: refusing new connections", "max", *drain)
+	lobby.Drain()
+	go func() {
+		// A second ctrl+c (or SIGTERM) skips the drain.
+		<-done
+		_ = s.Close()
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), *drain)
 	defer cancel()
-	_ = s.Shutdown(ctx)
+	if err := s.Shutdown(ctx); err != nil {
+		log.Info("drain limit reached, closing remaining connections")
+		_ = s.Close()
+	}
 }
 
 // authOption decides who may connect. With no allowlist and no password

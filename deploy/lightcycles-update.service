@@ -1,0 +1,8 @@
+[Unit]
+Description=Deploy a new Light Cycles image without dropping players
+After=network-online.target user@.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lightcycles-update

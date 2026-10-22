@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for a new Light Cycles image every 5 minutes
+
+[Timer]
+# Also runs shortly after boot, which starts the game and restores the
+# port forward.
+OnBootSec=30s
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

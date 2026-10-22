@@ -2,9 +2,9 @@
 
 The server runs as a [ko](https://ko.build)-built container under rootless
 Podman on a Debian/Ubuntu VM. GitHub Actions builds and signs a new image on
-every push to `main`. The VM checks for one every 5 minutes, verifies the
-signature, and swaps it in. If the new container fails to start, the VM
-rolls back to the old one.
+every push to `main`. Every 5 minutes, the VM checks for one, verifies the
+signature, and hands over to it without dropping anyone who's playing (see
+[Updates](#updates-without-dropping-players)).
 
 ```
 push to main ──► Actions: test → ko build → push to ghcr.io → cosign sign
@@ -21,7 +21,7 @@ holds no SSH keys for it.
 |---|---|
 | Host login | Admin SSH moves to its own port (2200 by default) so the game can have 22. Keys only, no root login, no passwords, 3 tries per connection. fail2ban bans an IP for an hour after 5 failures. |
 | Host updates | `unattended-upgrades` installs security updates daily. |
-| Network | `ufw` denies all incoming traffic except admin SSH (rate-limited) and the game. Port 22 is forwarded to the game container on 2222, so `ssh host` lands in the game. Other ports stay open only if you pass `--allow`. |
+| Network | `ufw` denies all incoming traffic except admin SSH (rate-limited) and the game. Public ports 22 and 2222 are forwarded to the live game container (host port 2301 or 2302), so `ssh host` lands in the game. Other ports stay open only if you pass `--allow`. |
 | Game process | Runs in a container owned by a separate `lightcycles` user that has no login shell and no sudo. Inside the container it runs as uid 65532 with every capability dropped, a read-only filesystem, no privilege escalation, and limits of 512 MB memory, 1 CPU and 256 processes. The image is distroless: no shell, no package manager, just the binary. |
 | Game access | The game's SSH server only runs the game, never a shell or other commands. Players get in either with a key listed in `~lightcycles/players` or with the game password, which setup.sh asks for and stores in `~lightcycles/lightcycles.env` (mode 600, not in the repo). Players who use the password don't get their name locked to a key. Idle connections drop after 30 minutes. |
 | Supply chain | The VM only accepts `ghcr.io/sh4r10/lightcycles` images signed with this repo's cosign key, and rejects images from anywhere else. |
@@ -60,7 +60,7 @@ sudo ./lightcycles-deploy/setup.sh --ssh-port 2200   # add --allow 443 etc. for 
 
 The script opens the new admin port in the firewall first, then moves sshd
 to it and checks that sshd is listening there. If it isn't, it moves sshd
-back. Only then does it forward 22 to the game.
+back. Only after that does the game take over 22.
 
 The script asks before enabling the firewall and lists anything else
 listening that would be blocked. It also asks for a GitHub token with only
@@ -72,7 +72,8 @@ passwords are off from that point on. If you do get locked out, Linode's
 Lish console still works.
 
 If you use a Linode Cloud Firewall (a good second layer outside the VM),
-allow inbound TCP 22, 2222 and 2200 **before** running the script.
+allow inbound TCP 22, 2222, 2301–2302 and 2200 **before** running the
+script.
 Otherwise it will block the new admin port.
 
 ### 3. Players
@@ -89,22 +90,50 @@ re-read on every login, so you don't need to restart:
 sudo nano ~lightcycles/players
 ```
 
-To change the password, edit `~lightcycles/lightcycles.env` and run
-`lcctl systemctl --user restart lightcycles`. Leaving the
-password empty and dropping `-allow-keys` opens the game to anyone.
+To change the password, edit `~lightcycles/lightcycles.env`. It takes
+effect at the next deploy. Leaving the password empty and dropping
+`-allow-keys` opens the game to anyone.
 
 ## Day to day
 
 ```sh
-lcctl podman logs -f lightcycles                     # logs
-lcctl systemctl --user start podman-auto-update      # deploy the latest image now
-lcctl systemctl --user restart lightcycles           # restart
+sudo lightcycles-update status                       # which colour is live, which is draining
+sudo systemctl start lightcycles-update              # deploy the latest image now
+sudo journalctl -u lightcycles-update                # what the updater did
+sudo journalctl -f CONTAINER_NAME=lightcycles-blue + CONTAINER_NAME=lightcycles-green   # game logs
 lcctl systemctl --user start lightcycles-backup      # back up now
-lcctl podman auto-update --dry-run                   # is a new image waiting?
 ```
 
-A deploy restarts the server, so anyone mid-round gets dropped and can
-rejoin.
+## Updates without dropping players
+
+Games live in the server's memory, so a connected player can't be moved to
+a new version. Instead, nobody gets cut off:
+
+1. Two copies of the game unit exist, `lightcycles-blue` (port 2301) and
+   `lightcycles-green` (port 2302). One is live. A NAT rule sends new
+   connections on 22 and 2222 to it.
+2. When a new signed image appears, `lightcycles-update` starts the idle
+   colour on it and waits until it's listening. Then it flips the NAT rule.
+   From that moment, everyone who connects gets the new version.
+3. Connections that already exist keep going to the old server, because the
+   kernel's connection tracking remembers where each one was sent. The old
+   server is then stopped, which makes it drain: it stops accepting
+   connections, tells its players "Update ready! Reconnect whenever you like
+   to get it", and keeps their games running. It exits when the last one
+   leaves, or after 30 minutes (`-drain`).
+
+Trade-offs:
+
+- For a while there are two lobbies. Players still on the old version don't
+  see rooms created on the new one, and vice versa. The leaderboard is
+  shared, since both use the same SQLite file in WAL mode.
+- A player who stays connected for more than 30 minutes after an update is
+  disconnected and has to rejoin.
+- If another update lands while the old version is still draining, it waits
+  for the next 5-minute check after the drain ends.
+- If the new version fails to start listening within a minute, it's stopped
+  and the current one stays live. A version that starts but misbehaves
+  needs a fix pushed to `main`, and that rolls forward the same way.
 
 ## Backups
 
@@ -115,7 +144,7 @@ losing the VM, so also turn on your provider's backups (Linode Backups). To
 copy a backup off the box:
 
 ```sh
-lcctl podman cp lightcycles:/data/backups/ /tmp/lc-backups && sudo cp -r /tmp/lc-backups ~/
+lcctl podman cp "lightcycles-$(cat /var/lib/lightcycles-deploy/active)":/data/backups/ /tmp/lc-backups && sudo cp -r /tmp/lc-backups ~/
 ```
 
 The volume also holds the game's SSH host key (`/data/host_ed25519`), so

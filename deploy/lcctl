@@ -2,9 +2,9 @@
 # Run a command as the rootless "lightcycles" user, which owns the game's
 # containers. Installed to /usr/local/bin/lcctl by setup.sh. Examples:
 #
-#   lcctl podman logs -f lightcycles
-#   lcctl systemctl --user restart lightcycles
-#   lcctl systemctl --user start podman-auto-update   # deploy now
+#   lcctl podman ps
+#   lcctl systemctl --user status lightcycles-blue
+#   lcctl systemctl --user start lightcycles-backup
 set -eu
 uid=$(id -u lightcycles)
 cd /

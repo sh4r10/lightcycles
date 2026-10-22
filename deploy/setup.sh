@@ -19,7 +19,6 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 admin=${SUDO_USER:-}
 ssh_port=2200
-game_port=2222 # the container's port; the firewall forwards 22 to it
 extra_ports=()
 assume_yes=false
 while [ $# -gt 0 ]; do
@@ -84,8 +83,8 @@ admin_home=$(getent passwd "$admin" | cut -d: -f6)
 id -nG "$admin" | grep -qw sudo || die "$admin is not in the sudo group"
 
 say "Moving admin SSH to port $ssh_port (keys only, no root login)"
-[[ $ssh_port =~ ^[0-9]+$ ]] && [ "$ssh_port" != 22 ] && [ "$ssh_port" != "$game_port" ] ||
-	die "--ssh-port must be a number other than 22 and $game_port"
+[[ $ssh_port =~ ^[0-9]+$ ]] && [[ ! " 22 2222 2301 2302 " == *" $ssh_port "* ]] ||
+	die "--ssh-port must be a number other than 22, 2222, 2301 and 2302 (the game uses those)"
 grep -Eq '^\s*Include\s+/etc/ssh/sshd_config.d/' /etc/ssh/sshd_config ||
 	die "/etc/ssh/sshd_config doesn't include sshd_config.d/; add 'Include /etc/ssh/sshd_config.d/*.conf' at the top"
 # Open the new port before sshd moves to it, so a running firewall can't
@@ -118,43 +117,29 @@ systemctl enable fail2ban >/dev/null
 systemctl restart fail2ban
 
 say "Configuring the firewall (game on 22, admin SSH on $ssh_port)"
-ufw allow "$game_port/tcp" comment lightcycles >/dev/null
+# Public ports 22 and 2222 are NAT-redirected (by lightcycles-update) to the
+# live colour's port, and the firewall sees the redirected port. Rootless
+# podman can't bind ports below 1024, and a redirect is narrower than letting
+# every user bind them.
+ufw allow 2301:2302/tcp comment lightcycles >/dev/null
 for p in "${extra_ports[@]}"; do ufw allow "$p/tcp" >/dev/null; done
-# Forward port 22 to the game. Rootless podman can't bind ports below 1024,
-# and a redirect is narrower than letting every user bind them.
-for f in /etc/ufw/before.rules /etc/ufw/before6.rules; do
-	grep -q 'BEGIN lightcycles' "$f" && continue
-	tmp=$(mktemp)
-	{
-		echo "# BEGIN lightcycles: forward the game's public port 22 to the container"
-		echo "*nat"
-		echo ":PREROUTING ACCEPT [0:0]"
-		echo "-A PREROUTING -p tcp --dport 22 -j REDIRECT --to-ports $game_port"
-		echo "COMMIT"
-		echo "# END lightcycles"
-		echo
-		cat "$f"
-	} >"$tmp"
-	cat "$tmp" >"$f"
-	rm -f "$tmp"
-done
 if ufw status | grep -q '^Status: active'; then
 	ufw reload >/dev/null
 else
 	# Anything else listening publicly would be cut off, so list it first.
-	keep=" $ssh_port 22 $game_port ${extra_ports[*]} "
+	keep=" $ssh_port 22 2222 2301 2302 ${extra_ports[*]} "
 	others=$(ss -Htln | awk '{print $4}' | grep -Ev '^(127\.|\[::1\]|\[?::ffff:127\.)' |
 		sed 's/.*://' | sort -un | while read -r p; do [[ $keep == *" $p "* ]] || echo "$p"; done)
 	if [ -n "$others" ]; then
 		echo "These ports are listening but will be blocked:" $others
 		echo "Re-run with --allow PORT for any that should stay open."
 	fi
-	if confirm "Enable the firewall now (incoming: SSH $ssh_port, game 22 and $game_port${extra_ports:+, ${extra_ports[*]}})?"; then
+	if confirm "Enable the firewall now (incoming: SSH $ssh_port, game 22/2222${extra_ports:+, ${extra_ports[*]}})?"; then
 		ufw default deny incoming >/dev/null
 		ufw default allow outgoing >/dev/null
 		ufw --force enable
 	else
-		echo "Skipped. The game is only on $game_port until you run 'sudo ufw enable'."
+		echo "Skipped. Run 'sudo ufw enable' when you're ready."
 	fi
 fi
 if command -v docker >/dev/null; then
@@ -184,16 +169,20 @@ install -m 755 "$here/lcctl" /usr/local/bin/lcctl
 as_lc() { /usr/local/bin/lcctl "$@"; }
 cfg=$lc_home/.config
 install -d -o lightcycles -g lightcycles "$cfg" "$cfg/containers" "$cfg/containers/systemd" \
-	"$cfg/containers/registries.d" "$cfg/systemd" "$cfg/systemd/user" \
-	"$cfg/systemd/user/podman-auto-update.timer.d"
+	"$cfg/containers/registries.d" "$cfg/systemd" "$cfg/systemd/user"
 inst() { install -m 644 -o lightcycles -g lightcycles "$here/$1" "$2"; }
-inst lightcycles.container "$cfg/containers/systemd/lightcycles.container"
+for color in blue:2301 green:2302; do
+	sed "s/@COLOR@/${color%:*}/g; s/@PORT@/${color#*:}/g" "$here/lightcycles.container" \
+		>"$cfg/containers/systemd/lightcycles-${color%:*}.container"
+	chown lightcycles:lightcycles "$cfg/containers/systemd/lightcycles-${color%:*}.container"
+done
 inst policy.json "$cfg/containers/policy.json"
 inst registries-ghcr.yaml "$cfg/containers/registries.d/ghcr.yaml"
 inst cosign.pub "$cfg/containers/cosign.pub"
 inst lightcycles-backup.service "$cfg/systemd/user/lightcycles-backup.service"
 inst lightcycles-backup.timer "$cfg/systemd/user/lightcycles-backup.timer"
-inst auto-update-override.conf "$cfg/systemd/user/podman-auto-update.timer.d/override.conf"
+install -m 755 "$here/lightcycles-update" /usr/local/sbin/lightcycles-update
+install -m 644 "$here/lightcycles-update.service" "$here/lightcycles-update.timer" /etc/systemd/system/
 if [ ! -e "$lc_home/players" ]; then
 	printf '# Public SSH keys of players allowed in, one per line (authorized_keys format).\n' >"$lc_home/players"
 	chown lightcycles:lightcycles "$lc_home/players"
@@ -223,16 +212,19 @@ fi
 
 say "Starting the game"
 as_lc systemctl --user daemon-reload
-as_lc systemctl --user restart lightcycles.service
-as_lc systemctl --user enable --now podman-auto-update.timer lightcycles-backup.timer
+systemctl daemon-reload
+/usr/local/sbin/lightcycles-update
+systemctl enable --now lightcycles-update.timer
+as_lc systemctl --user enable --now lightcycles-backup.timer
 
 cat <<EOF
 
-Done. Light Cycles is on port 22 (and $game_port). Admin SSH is now on $ssh_port.
+Done. Light Cycles is on port 22 (and 2222). Admin SSH is now on $ssh_port.
 
   Add players:       sudo nano $lc_home/players   (one public key per line)
-  Logs:              lcctl podman logs -f lightcycles
-  Deploy right now:  lcctl systemctl --user start podman-auto-update
+  Logs:              sudo journalctl -f CONTAINER_NAME=lightcycles-blue + CONTAINER_NAME=lightcycles-green
+  Which is live:     sudo lightcycles-update status
+  Deploy right now:  sudo systemctl start lightcycles-update
   Backup right now:  lcctl systemctl --user start lightcycles-backup
 
 Before you log out, open a NEW terminal and check you can still log in:

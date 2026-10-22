@@ -119,7 +119,9 @@ A host key is generated on first run. To gate the game, `-password` (or
 `$LIGHTCYCLES_PASSWORD`) sets a password players can join with, and
 `-allow-keys FILE` lets in the public keys in an authorized_keys-style file
 (re-read on every login) without one. With either set, other keys are
-refused. `lightcycles backup -db lightcycles.db -dir backups` writes a consistent
+refused. On SIGTERM the server drains: it stops taking new connections
+but lets connected players finish, for up to `-drain` (30 minutes).
+`lightcycles backup -db lightcycles.db -dir backups` writes a consistent
 copy of the leaderboard while the server is running.
 
 To host it, see [deploy/DEPLOY.md](deploy/DEPLOY.md). It covers a hardened VM

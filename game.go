@@ -303,6 +303,13 @@ func (g *Game) clearTrail(id int) {
 	}
 }
 
+// Announce adds a line to the game's feed from outside the game loop.
+func (g *Game) Announce(s string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.pushFeed(s)
+}
+
 func (g *Game) pushFeed(s string) {
 	g.feed = append(g.feed, s)
 	if len(g.feed) > feedLen {
