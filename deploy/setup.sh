@@ -42,6 +42,11 @@ confirm() {
 
 [ "$(id -u)" = 0 ] || die "run this with sudo"
 command -v apt-get >/dev/null || die "this script supports Debian and Ubuntu only"
+. /etc/os-release
+case "$ID" in
+ubuntu) printf '24.04\n%s\n' "$VERSION_ID" | sort -V -C || die "Ubuntu $VERSION_ID ships Podman 3.4, which has no Quadlet; rebuild the VM with Ubuntu 24.04 or newer" ;;
+debian) [ "${VERSION_ID%%.*}" -ge 13 ] 2>/dev/null || die "Debian $VERSION_ID's Podman has no Quadlet; use Debian 13 or newer" ;;
+esac
 [ -s "$here/cosign.pub" ] || die "deploy/cosign.pub is missing; see 'Signing key' in DEPLOY.md"
 
 say "Installing packages"
