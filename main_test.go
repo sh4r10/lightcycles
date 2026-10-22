@@ -72,6 +72,7 @@ func TestBackup(t *testing.T) {
 
 func TestAuthOption(t *testing.T) {
 	listed, unlisted := newSigner(t), newSigner(t)
+	pass := rand.Text()
 	allow := filepath.Join(t.TempDir(), "players")
 	if err := os.WriteFile(allow, gossh.MarshalAuthorizedKey(listed.PublicKey()), 0o600); err != nil {
 		t.Fatal(err)
@@ -79,7 +80,7 @@ func TestAuthOption(t *testing.T) {
 	s, err := wish.NewServer(
 		wish.WithAddress("127.0.0.1:0"),
 		wish.WithHostKeyPath(filepath.Join(t.TempDir(), "host")),
-		authOption(allow, "Netcompany123"),
+		authOption(allow, pass),
 		wish.WithMiddleware(func(ssh.Handler) ssh.Handler {
 			return func(s ssh.Session) { _ = s.Exit(0) }
 		}),
@@ -100,9 +101,9 @@ func TestAuthOption(t *testing.T) {
 	}{
 		"listed key":           {[]gossh.AuthMethod{gossh.PublicKeys(listed)}, true},
 		"unlisted key":         {[]gossh.AuthMethod{gossh.PublicKeys(unlisted)}, false},
-		"right password":       {[]gossh.AuthMethod{gossh.Password("Netcompany123")}, true},
-		"wrong password":       {[]gossh.AuthMethod{gossh.Password("hunter2")}, false},
-		"unlisted key + pass":  {[]gossh.AuthMethod{gossh.PublicKeys(unlisted), gossh.Password("Netcompany123")}, true},
+		"right password":       {[]gossh.AuthMethod{gossh.Password(pass)}, true},
+		"wrong password":       {[]gossh.AuthMethod{gossh.Password(pass + "x")}, false},
+		"unlisted key + pass":  {[]gossh.AuthMethod{gossh.PublicKeys(unlisted), gossh.Password(pass)}, true},
 		"keyboard-interactive": {[]gossh.AuthMethod{gossh.KeyboardInteractive(func(string, string, []string, []bool) ([]string, error) { return nil, nil })}, false},
 	} {
 		conn, err := gossh.Dial("tcp", ln.Addr().String(), &gossh.ClientConfig{

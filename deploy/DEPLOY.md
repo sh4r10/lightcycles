@@ -23,7 +23,7 @@ holds no SSH keys for it.
 | Host updates | `unattended-upgrades` installs security updates daily. |
 | Network | `ufw` denies all incoming traffic except admin SSH (rate-limited) and the game. Port 22 is forwarded to the game container on 2222, so `ssh host` lands in the game. Other ports stay open only if you pass `--allow`. |
 | Game process | Runs in a container owned by a separate `lightcycles` user that has no login shell and no sudo. Inside the container it runs as uid 65532 with every capability dropped, a read-only filesystem, no privilege escalation, and limits of 512 MB memory, 1 CPU and 256 processes. The image is distroless: no shell, no package manager, just the binary. |
-| Game access | The game's SSH server only runs the game, never a shell or other commands. Players get in either with a key listed in `~lightcycles/players` or with the password `Netcompany123` (set in `lightcycles.container`). That password is a joke-level gate, not a secret, and password players' names aren't locked to a key. Idle connections drop after 30 minutes. |
+| Game access | The game's SSH server only runs the game, never a shell or other commands. Players get in either with a key listed in `~lightcycles/players` or with the game password, which setup.sh asks for and stores in `~lightcycles/lightcycles.env` (mode 600, not in the repo). Players who use the password don't get their name locked to a key. Idle connections drop after 30 minutes. |
 | Supply chain | The VM only accepts `ghcr.io/sh4r10/lightcycles` images signed with this repo's cosign key, and rejects images from anywhere else. |
 | Secrets | Nothing secret is in the repo. The cosign private key lives in GitHub secrets. The registry token on the VM is read-only (`read:packages`) and stored mode 600 in the `lightcycles` user's home. |
 
@@ -77,8 +77,8 @@ Otherwise it will block the new admin port.
 
 ### 3. Players
 
-Players join with `ssh yourname@your-vm` and enter `Netcompany123` when
-asked for a password. The built-in client (`lightcycles play your-vm`)
+Players join with `ssh yourname@your-vm` and enter the game password when
+asked. The built-in client (`lightcycles play your-vm`)
 prompts too, or reads `$LIGHTCYCLES_PASSWORD`.
 
 To skip the password and lock their name to their key, add a player's
@@ -89,9 +89,9 @@ re-read on every login, so you don't need to restart:
 sudo nano ~lightcycles/players
 ```
 
-To change the password, edit `LIGHTCYCLES_PASSWORD` in
-`lightcycles.container`, re-run `setup.sh`, and restart the game. Removing
-both the password and `-allow-keys` opens the game to anyone.
+To change the password, edit `~lightcycles/lightcycles.env` and run
+`lcctl systemctl --user restart lightcycles`. Leaving the
+password empty and dropping `-allow-keys` opens the game to anyone.
 
 ## Day to day
 

@@ -16,9 +16,9 @@ AutoUpdate=registry
 # get in without the password.
 Volume=lightcycles-data:/data:U,Z
 Volume=%h/players:/config/players:ro,Z
-# Players without a listed key join with this password. It's an inside joke,
-# not a secret: anyone who can read this repo can see it.
-Environment=LIGHTCYCLES_PASSWORD=Netcompany123
+# Players without a listed key join with the password in this file
+# (LIGHTCYCLES_PASSWORD=...). setup.sh creates it; it isn't in the repo.
+EnvironmentFile=%h/lightcycles.env
 Exec=serve -db /data/lightcycles.db -key /data/host_ed25519 -sounds /data/sounds -allow-keys /config/players
 # The host firewall forwards port 22 here (see setup.sh).
 PublishPort=2222:2222

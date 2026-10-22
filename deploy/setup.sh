@@ -195,6 +195,15 @@ if [ ! -e "$lc_home/players" ]; then
 	chmod 644 "$lc_home/players"
 fi
 
+if [ ! -e "$lc_home/lightcycles.env" ]; then
+	read -r -s -p "Game password players join with (empty for none): " game_pw
+	echo
+	# The file is read by systemd, not a shell, so no quoting is needed.
+	printf 'LIGHTCYCLES_PASSWORD=%s\n' "$game_pw" >"$lc_home/lightcycles.env"
+	chown lightcycles:lightcycles "$lc_home/lightcycles.env"
+	chmod 600 "$lc_home/lightcycles.env"
+fi
+
 say "Logging in to GitHub's container registry"
 if [ ! -s "$cfg/containers/auth.json" ]; then
 	echo "The image is private. Create a classic GitHub token with only the read:packages scope"
