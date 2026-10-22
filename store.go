@@ -41,6 +41,12 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Columns added after the first release. SQLite has no ADD COLUMN IF
+	// NOT EXISTS, so a "duplicate column" error just means it's done.
+	if _, err := db.Exec(`ALTER TABLE players ADD COLUMN cases INTEGER NOT NULL DEFAULT 0`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
 }
 
@@ -76,12 +82,12 @@ func (s *Store) Record(stats []RoundStat) {
 	defer tx.Rollback()
 	for _, st := range stats {
 		_, err := tx.Exec(`
-			INSERT INTO players (name, wins, kills, deaths, rounds) VALUES (?, ?, ?, ?, 1)
+			INSERT INTO players (name, wins, kills, deaths, cases, rounds) VALUES (?, ?, ?, ?, ?, 1)
 			ON CONFLICT(name) DO UPDATE SET
 				wins = wins + excluded.wins, kills = kills + excluded.kills,
-				deaths = deaths + excluded.deaths, rounds = rounds + 1,
-				last_seen = CURRENT_TIMESTAMP`,
-			st.Name, b2i(st.Won), st.Kills, b2i(st.Died))
+				deaths = deaths + excluded.deaths, cases = cases + excluded.cases,
+				rounds = rounds + 1, last_seen = CURRENT_TIMESTAMP`,
+			st.Name, b2i(st.Won), st.Kills, b2i(st.Died), b2i(st.ClosedCase))
 		if err != nil {
 			log.Error("leaderboard write failed", "error", err)
 			return
@@ -98,12 +104,13 @@ type Stat struct {
 	Wins   int
 	Kills  int
 	Deaths int
+	Cases  int // rounds won while holding the case
 	Rounds int
 }
 
 func (s *Store) Top(n int) ([]Stat, error) {
 	rows, err := s.db.Query(`
-		SELECT name, wins, kills, deaths, rounds FROM players WHERE rounds > 0
+		SELECT name, wins, kills, deaths, cases, rounds FROM players WHERE rounds > 0
 		ORDER BY wins DESC, kills DESC, rounds ASC, name LIMIT ?`, n)
 	if err != nil {
 		return nil, err
@@ -112,7 +119,7 @@ func (s *Store) Top(n int) ([]Stat, error) {
 	var out []Stat
 	for rows.Next() {
 		st := Stat{Rank: len(out) + 1}
-		if err := rows.Scan(&st.Name, &st.Wins, &st.Kills, &st.Deaths, &st.Rounds); err != nil {
+		if err := rows.Scan(&st.Name, &st.Wins, &st.Kills, &st.Deaths, &st.Cases, &st.Rounds); err != nil {
 			return nil, err
 		}
 		out = append(out, st)
@@ -123,8 +130,8 @@ func (s *Store) Top(n int) ([]Stat, error) {
 // Lookup returns one player's stats and rank (rank 0 if unranked).
 func (s *Store) Lookup(name string) (Stat, error) {
 	st := Stat{Name: name}
-	err := s.db.QueryRow(`SELECT name, wins, kills, deaths, rounds FROM players WHERE name = ?`, name).
-		Scan(&st.Name, &st.Wins, &st.Kills, &st.Deaths, &st.Rounds)
+	err := s.db.QueryRow(`SELECT name, wins, kills, deaths, cases, rounds FROM players WHERE name = ?`, name).
+		Scan(&st.Name, &st.Wins, &st.Kills, &st.Deaths, &st.Cases, &st.Rounds)
 	if errors.Is(err, sql.ErrNoRows) || st.Rounds == 0 {
 		return st, nil
 	}

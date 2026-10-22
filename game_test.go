@@ -10,8 +10,8 @@ import (
 func newTestGame(t *testing.T) (*Game, *Player, *Player) {
 	t.Helper()
 	g := NewGame("test", Settings{Name: "t", Size: 0, MaxPlayers: 8}, nil)
-	a := g.addPlayer("a", false)
-	b := g.addPlayer("b", false)
+	a := g.addPlayer("a", KindHuman)
+	b := g.addPlayer("b", KindHuman)
 	g.startRound()
 	clear(g.grid)
 	place := func(p *Player, x, y int, d Dir) {

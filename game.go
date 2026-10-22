@@ -58,6 +58,7 @@ type Player struct {
 	Name       string
 	Color      int
 	Bot        bool
+	Kind       Kind
 	X, Y       int
 	Dir        Dir
 	queue      []Dir
@@ -82,10 +83,11 @@ type Settings struct {
 
 // RoundStat is one human's result for a finished round, for the leaderboard.
 type RoundStat struct {
-	Name  string
-	Won   bool
-	Died  bool
-	Kills int
+	Name       string
+	Won        bool
+	Died       bool
+	Kills      int
+	ClosedCase bool // won the round while holding the case
 }
 
 // Game is one arena. A single goroutine advances it; sessions push inputs
@@ -106,6 +108,7 @@ type Game struct {
 	nextID    int
 	usedColor [maxCycles]bool
 	onRound   func([]RoundStat)
+	caseOwner int // player ID holding "the case" this round, 0 if none
 	snap      atomic.Pointer[Snapshot]
 	quit      chan struct{}
 	stopOnce  sync.Once
@@ -176,7 +179,7 @@ func (g *Game) wantBots() int {
 	return max(want, 0)
 }
 
-func (g *Game) addPlayer(name string, bot bool) *Player {
+func (g *Game) addPlayer(name string, kind Kind) *Player {
 	color := 0
 	for i, used := range g.usedColor {
 		if !used {
@@ -185,7 +188,7 @@ func (g *Game) addPlayer(name string, bot bool) *Player {
 		}
 	}
 	g.usedColor[color] = true
-	p := &Player{ID: g.nextID, Name: g.uniqueName(name), Color: color, Bot: bot}
+	p := &Player{ID: g.nextID, Name: g.uniqueName(name), Color: color, Bot: kind != KindHuman, Kind: kind}
 	g.nextID++
 	g.players[p.ID] = p
 	return p
@@ -224,7 +227,7 @@ func (g *Game) Join(name string) (int, error) {
 	if len(g.players) >= min(g.Settings.MaxPlayers, maxCycles) || (g.phase == Countdown && g.botCount() > g.wantBots()-1) {
 		g.dropBot()
 	}
-	p := g.addPlayer(name, false)
+	p := g.addPlayer(name, KindHuman)
 	g.pushFeed(fmt.Sprintf("%s joined", p.Name))
 	if g.phase == Countdown {
 		g.placeLate(p)
@@ -360,13 +363,29 @@ var botNames = []string{
 	"bot-ion", "bot-jinx", "bot-kilo", "bot-lux", "bot-mips", "bot-nyx", "bot-ohm", "bot-pip",
 }
 
-func (g *Game) freeBotName() string {
-	for _, i := range rand.Perm(len(botNames)) {
-		if g.uniqueName(botNames[i]) == botNames[i] {
-			return botNames[i]
+// addBot brings in the next Team 7 persona who isn't here yet, then
+// generic bots once the roster is used up.
+func (g *Game) addBot() {
+	present := map[Kind]map[string]bool{}
+	for _, p := range g.players {
+		if present[p.Kind] == nil {
+			present[p.Kind] = map[string]bool{}
+		}
+		present[p.Kind][p.Name] = true
+	}
+	for _, r := range botRoster {
+		if !present[r.Kind][r.Name] {
+			g.addPlayer(r.Name, r.Kind)
+			return
 		}
 	}
-	return "bot"
+	for _, i := range rand.Perm(len(botNames)) {
+		if g.uniqueName(botNames[i]) == botNames[i] {
+			g.addPlayer(botNames[i], KindBot)
+			return
+		}
+	}
+	g.addPlayer("bot", KindBot)
 }
 
 func (g *Game) canStart() bool {
@@ -379,7 +398,7 @@ func (g *Game) startRound() {
 		g.dropBot()
 	}
 	for g.botCount() < want && len(g.players) < maxCycles {
-		g.addPlayer(g.freeBotName(), true)
+		g.addBot()
 	}
 
 	clear(g.grid)
@@ -399,6 +418,28 @@ func (g *Game) startRound() {
 	g.tick = 0
 	g.phase, g.phaseLeft = Countdown, countdownLen
 	g.banner = ""
+	for _, l := range roundStartLines(g) {
+		g.pushFeed(l)
+	}
+	g.assignCase()
+}
+
+// assignCase hands "the case" to a random human. It moves to whoever kills
+// its holder, and winning while holding it closes the case.
+func (g *Game) assignCase() {
+	g.caseOwner = 0
+	var humans []*Player
+	for _, p := range g.players {
+		if !p.Bot && p.InRound {
+			humans = append(humans, p)
+		}
+	}
+	if len(humans) == 0 {
+		return
+	}
+	p := humans[rand.Intn(len(humans))]
+	g.caseOwner = p.ID
+	g.pushFeed(caseAssignedLine(p))
 }
 
 func (g *Game) step() {
@@ -415,6 +456,7 @@ func (g *Game) step() {
 	case Playing:
 		g.tick++
 		g.moveAll()
+		g.chatter()
 		g.checkRoundOver()
 	case RoundOver:
 		g.phaseLeft--
@@ -446,12 +488,16 @@ func (g *Game) moveAll() {
 			p.Cooldown--
 		}
 		// Normal speed is one cell every other tick; boost moves every tick.
+		// mitdk is a baby and goes at half speed.
 		if p.Boost > 0 {
 			p.Boost--
-		} else if g.tick%2 != 0 {
+		} else if g.tick%2 != 0 || (p.Kind == KindMitdk && g.tick%4 != 0) {
 			continue
 		}
-		if p.Bot {
+		switch p.Kind {
+		case KindHarasmus:
+			g.harasmusThink(p)
+		case KindBot, KindMitdk, KindAIBro:
 			g.botThink(p)
 		}
 		if len(p.queue) > 0 {
@@ -466,18 +512,20 @@ func (g *Game) moveAll() {
 
 	// Resolve all moves simultaneously so nobody wins a head-on by ID order.
 	dead := map[int]string{}
+	killers := map[int]*Player{}
 	for _, m := range moves {
 		switch {
 		case m.x < 0 || m.y < 0 || m.x >= g.W || m.y >= g.H:
-			dead[m.p.ID] = fmt.Sprintf("%s hit the wall", m.p.Name)
+			dead[m.p.ID] = deathLine(m.p, nil)
 		case g.at(m.x, m.y) != 0:
 			owner := g.players[g.at(m.x, m.y)]
 			if owner == nil || owner.ID == m.p.ID {
-				dead[m.p.ID] = fmt.Sprintf("%s crashed into their own trail", m.p.Name)
+				dead[m.p.ID] = deathLine(m.p, nil)
 			} else {
 				owner.Kills++
 				owner.RoundKills++
-				dead[m.p.ID] = fmt.Sprintf("%s ⟶ %s's trail", m.p.Name, owner.Name)
+				killers[m.p.ID] = owner
+				dead[m.p.ID] = deathLine(m.p, owner)
 			}
 		}
 	}
@@ -504,6 +552,45 @@ func (g *Game) moveAll() {
 	// Dead cycles' trails vanish, opening up the arena mid-round.
 	for id := range dead {
 		g.clearTrail(id)
+	}
+	if _, ok := dead[g.caseOwner]; ok {
+		g.passCase(g.players[g.caseOwner], killers[g.caseOwner])
+	}
+}
+
+// passCase moves the case off a crashed holder: to their killer if there
+// is one still riding, otherwise to a random survivor.
+func (g *Game) passCase(from, to *Player) {
+	if to == nil || !to.Alive {
+		var alive []*Player
+		for _, p := range g.players {
+			if p.InRound && p.Alive {
+				alive = append(alive, p)
+			}
+		}
+		if len(alive) == 0 {
+			g.caseOwner = 0
+			return
+		}
+		to = alive[rand.Intn(len(alive))]
+	}
+	g.caseOwner = to.ID
+	g.pushFeed(caseMovedLine(from, to))
+}
+
+// chatter has a living AI bro say something every eight seconds or so.
+func (g *Game) chatter() {
+	if g.tick%160 != 80 {
+		return
+	}
+	var bros []*Player
+	for _, p := range g.players {
+		if p.Kind == KindAIBro && p.InRound && p.Alive {
+			bros = append(bros, p)
+		}
+	}
+	if len(bros) > 0 {
+		g.pushFeed(chatterLine(bros[rand.Intn(len(bros))]))
 	}
 }
 
@@ -535,6 +622,9 @@ func (g *Game) checkRoundOver() {
 		winner = alive[0]
 		winner.Wins++
 		g.banner = fmt.Sprintf("%s wins round %d!", winner.Name, g.round)
+		if winner.ID == g.caseOwner {
+			g.banner = fmt.Sprintf("%s wins round %d and closes the case!", winner.Name, g.round)
+		}
 	case len(alive) == 0:
 		g.banner = fmt.Sprintf("Round %d is a draw", g.round)
 	default:
@@ -549,7 +639,8 @@ func (g *Game) checkRoundOver() {
 		var stats []RoundStat
 		for _, p := range g.players {
 			if p.InRound && !p.Bot {
-				stats = append(stats, RoundStat{Name: p.Name, Won: p == winner, Died: !p.Alive, Kills: p.RoundKills})
+				stats = append(stats, RoundStat{Name: p.Name, Won: p == winner, Died: !p.Alive, Kills: p.RoundKills,
+					ClosedCase: p == winner && p.ID == g.caseOwner})
 			}
 		}
 		go g.onRound(stats)
@@ -583,6 +674,42 @@ func (g *Game) botThink(p *Player) {
 	}
 	p.queue = []Dir{best}
 	if p.Cooldown == 0 && rand.Intn(60) == 0 {
+		g.boost(p)
+	}
+}
+
+// harasmusThink chases the nearest human, aiming a few cells ahead of them
+// to cut them off, but never into a pocket too small to survive.
+func (g *Game) harasmusThink(p *Player) {
+	var prey *Player
+	for _, o := range g.players {
+		if !o.Bot && o.InRound && o.Alive && (prey == nil || abs(o.X-p.X)+abs(o.Y-p.Y) < abs(prey.X-p.X)+abs(prey.Y-p.Y)) {
+			prey = o
+		}
+	}
+	if prey == nil {
+		g.botThink(p)
+		return
+	}
+	tx, ty := prey.X+deltas[prey.Dir][0]*4, prey.Y+deltas[prey.Dir][1]*4
+	best, bestScore := p.Dir, math.Inf(-1)
+	for _, d := range []Dir{p.Dir, (p.Dir + 1) % 4, (p.Dir + 3) % 4} {
+		nx, ny := p.X+deltas[d][0], p.Y+deltas[d][1]
+		if g.blocked(nx, ny) {
+			continue
+		}
+		room := g.space(nx, ny, 60)
+		score := -float64(abs(tx-nx) + abs(ty-ny))
+		if room < 30 {
+			score += float64(room) - 1000 // only if nothing roomier exists
+		}
+		score += rand.Float64()
+		if score > bestScore {
+			best, bestScore = d, score
+		}
+	}
+	p.queue = []Dir{best}
+	if p.Cooldown == 0 && abs(prey.X-p.X)+abs(prey.Y-p.Y) < 8 && rand.Intn(10) == 0 {
 		g.boost(p)
 	}
 }
@@ -625,6 +752,7 @@ type Snapshot struct {
 	Round     int
 	Feed      []string
 	Banner    string
+	CaseOwner int
 }
 
 func (s *Snapshot) At(x, y int) int { return s.Grid[y*s.W+x] }
@@ -651,6 +779,7 @@ func (g *Game) publish() {
 		Round:     g.round,
 		Feed:      append([]string(nil), g.feed...),
 		Banner:    g.banner,
+		CaseOwner: g.caseOwner,
 	}
 	for _, p := range g.players {
 		cp := *p

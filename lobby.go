@@ -22,7 +22,7 @@ type Lobby struct {
 
 func NewLobby(store *Store) *Lobby {
 	l := &Lobby{games: map[string]*Game{}, online: map[string]bool{}, store: store}
-	_, _ = l.Create(Settings{Name: "Public Arena", Host: "server", Size: 1, MaxPlayers: 12, Bots: true, Permanent: true})
+	_, _ = l.Create(Settings{Name: "Team 7 HQ", Host: "server", Size: 1, MaxPlayers: 12, Bots: true, Permanent: true})
 	return l
 }
 

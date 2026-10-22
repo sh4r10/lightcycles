@@ -109,7 +109,12 @@ func handler(lobby *Lobby, s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	if k := s.PublicKey(); k != nil {
 		keyFP = gossh.FingerprintSHA256(k)
 	}
-	sess := &session{}
+	sess := &session{out: s}
+	for _, e := range s.Environ() {
+		if e == "LIGHTCYCLES_CLIENT=1" {
+			sess.richSound = true
+		}
+	}
 	go func() {
 		<-s.Context().Done()
 		sess.close(lobby)

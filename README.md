@@ -32,7 +32,7 @@ then `lightcycles serve` / `lightcycles play HOST`.
    its host, arena size, players and status. Press `n` to host one: choose a
    name, an arena size, max players (2 to 16) and whether bots fill empty
    seats. Hosted games appear for everyone and end when the last player
-   leaves. There's always a permanent **Public Arena**.
+   leaves. There's always a permanent **Team 7 HQ** arena.
 3. **Check the leaderboard** with `l`.
 
 ## How to play
@@ -50,9 +50,39 @@ Arenas come in Small (40x20, fits one screen), Medium (80x40) and Large
 where everyone is. Terminals need to be at least 60x20; at 90+ columns you
 get the scoreboard, minimap and feed alongside.
 
+## Operations Team 7 edition
+
+- **HARASMUS** is in every game with bots, and he hunts the nearest human.
+  You'll see "HARASMUS is right behind you!" when he's close. Getting
+  killed by him means you got harassed by HARASMUS.
+- **mitdk**, shsh's baby, rides at half speed. Make mitdk crash and shsh
+  will hear about it.
+- **bot-gpt, bot-copilot and bot-claude** won't stop talking about AI in the
+  feed. Kafe is thrilled every time one of them crashes (and even more so if
+  Kafe did it).
+- **The case**: each round one human gets a new case. *WHY DID YOU ASSIGN
+  ME THIS CASE.* Their head turns gold. Kill the holder and the case is
+  reassigned to you. Win the round while holding it to close the case,
+  which counts in the leaderboard's CASES column.
+- Crash and you get a **FAHHH!**
+
+### Sound
+
+Plain `ssh` players get a terminal bell when they crash or win. The
+built-in client (`lightcycles play`) plays real sounds: countdown beeps, a
+synthesised FAHHH, kill blips, a win jingle, an office phone when you're
+assigned the case, and a siren when HARASMUS is close. Press `m` in game to
+mute, or pass `-mute`.
+
+The client uses your OS's own player (`afplay` on macOS, `paplay`/`pw-play`/
+`aplay` on Linux, PowerShell on Windows). To replace a sound, say with a
+recording of the team yelling FAHHH, drop a WAV named after it (`fahhh`,
+`beep`, `go`, `kill`, `win`, `case`, `harasmus`) into
+`~/.config/lightcycles/sounds/` (or your OS's config directory).
+
 ## Leaderboard
 
-Wins, kills, deaths and rounds are stored in SQLite (`-db`, default
+Wins, kills, deaths, closed cases and rounds are stored in SQLite (`-db`, default
 `lightcycles.db`; pass `-db ""` to run without one). Only rounds with at
 least two human players count, so wins against bots don't inflate the
 board.
@@ -76,4 +106,6 @@ move your admin sshd elsewhere first.
 - `app.go`: per-player screens (name, lobby, host form, leaderboard)
 - `gameview.go`: in-game view with camera, minimap and scoreboard
 - `client.go`: built-in SSH client (`play`)
+- `flavor.go`: Team 7 bot personas and feed lines
+- `sound.go`: sound cues, synthesised sounds and the client's audio player
 - `main.go`: commands and the Wish SSH server
