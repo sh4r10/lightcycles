@@ -32,6 +32,7 @@ type styles struct {
 	banner lipgloss.Style
 	sel    lipgloss.Style
 	caseHd lipgloss.Style // head of whoever holds the case
+	ky     lipgloss.Style // the KY toolkit pickup
 	fahhh  lipgloss.Style
 	err    lipgloss.Style
 	key    lipgloss.Style
@@ -47,6 +48,7 @@ func newStyles(r *lipgloss.Renderer) styles {
 		banner: r.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Background(lipgloss.Color("#5f00af")).Padding(0, 1),
 		sel:    r.NewStyle().Bold(true).Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#00d7ff")),
 		caseHd: r.NewStyle().Bold(true).Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#ffd700")),
+		ky:     r.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffff00")).Background(lipgloss.Color("#0000af")),
 		fahhh:  r.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Background(lipgloss.Color("#d70000")).Padding(0, 1),
 		err:    r.NewStyle().Foreground(lipgloss.Color("#ff5f5f")),
 		key:    r.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffd75f")),
@@ -173,7 +175,11 @@ func (v *gameView) renderHeader(me *Player) string {
 			}
 		}
 		status = st.bold.Render("GO!") + st.dim.Render(fmt.Sprintf("  %d cycles left", alive))
-		if v.harasmusNear(me) {
+		if me.Lag > 0 {
+			pct := kyProgress(me.Lag)
+			bar := strings.Repeat("▰", max(pct/10, 1)) + strings.Repeat("▱", 10-max(pct/10, 1))
+			status += "  " + st.ky.Render(fmt.Sprintf(" Loading KY toolkit… %d%% ", pct)) + " " + st.dim.Render(bar+" your steering is lagging")
+		} else if v.harasmusNear(me) {
 			status += "  " + st.fahhh.Render("HARASMUS is right behind you!")
 		} else if s.CaseOwner == me.ID {
 			status += "  " + st.caseHd.Render(" you hold the case ") + st.dim.Render(" win to close it")
@@ -211,6 +217,9 @@ func (v *gameView) renderBoard(vw, vh int) string {
 		if x < 0 || y < 0 || x >= s.W || y >= s.H {
 			return -1
 		}
+		if s.KY != nil && s.KY[0] == x && s.KY[1] == y {
+			return -2
+		}
 		if id := s.At(x, y); byID[id] != nil {
 			return id
 		}
@@ -234,6 +243,9 @@ func (v *gameView) renderBoard(vw, vh int) string {
 					run++
 				}
 				b.WriteString(st.wall.Render(strings.Repeat("░░", run-x)))
+			case -2:
+				b.WriteString(st.ky.Render("KY"))
+				run++
 			case 0:
 				for run < x0+vw && cell(run, y) == 0 {
 					run++
@@ -362,12 +374,18 @@ func (v *gameView) renderMinimap() string {
 			cells[(p.Y*mh/s.H)*mw+p.X*mw/s.W] = &mark{color: p.Color, head: true, me: p.ID == v.pid}
 		}
 	}
+	kyCell := -1
+	if s.KY != nil {
+		kyCell = (s.KY[1]*mh/s.H)*mw + s.KY[0]*mw/s.W
+	}
 	var b strings.Builder
 	b.WriteString(st.border.Render("┌"+strings.Repeat("─", mw)+"┐") + "\n")
 	for y := 0; y < mh; y++ {
 		b.WriteString(st.border.Render("│"))
 		for x := 0; x < mw; x++ {
 			switch m := cells[y*mw+x]; {
+			case y*mw+x == kyCell:
+				b.WriteString(st.ky.Render("K"))
 			case m == nil:
 				b.WriteByte(' ')
 			case m.me:

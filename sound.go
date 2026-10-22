@@ -32,9 +32,10 @@ const (
 	SndWin      Sound = "win"        // you won the round
 	SndCase     Sound = "case"       // you've been assigned the case
 	SndHarasmus Sound = "harasmus"   // HARASMUS is right behind you
+	SndKY       Sound = "ky"         // someone made you open KY toolkit
 )
 
-var allSounds = []Sound{SndBeep, SndGo, SndFahhh, SndFahhhMax, SndKill, SndWin, SndCase, SndHarasmus}
+var allSounds = []Sound{SndBeep, SndGo, SndFahhh, SndFahhhMax, SndKill, SndWin, SndCase, SndHarasmus, SndKY}
 
 // bellSounds are the ones worth a terminal bell for plain ssh players.
 var bellSounds = map[Sound]bool{SndFahhh: true, SndFahhhMax: true, SndWin: true}
@@ -179,6 +180,14 @@ func synth(s Sound) []float64 {
 		for range 2 {
 			out = append(out, tone(988, 0.12, 0.3)...)
 			out = append(out, tone(740, 0.12, 0.3)...)
+		}
+		return out
+	case SndKY:
+		// A sad, slow, sputtering "loading" chug that never quite gets there.
+		var out []float64
+		for i, f := range []float64{196, 185, 175, 165} {
+			out = append(out, tone(f, 0.16, 0.35)...)
+			out = append(out, make([]float64, samples(0.12+0.08*float64(i)))...)
 		}
 		return out
 	case SndFahhh:

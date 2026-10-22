@@ -64,6 +64,10 @@ get the scoreboard, minimap and feed alongside.
   ME THIS CASE.* Their head turns gold. Kill the holder and the case is
   reassigned to you. Win the round while holding it to close the case,
   which counts in the leaderboard's CASES column.
+- **KY toolkit**: every so often a blue **KY** box appears on the map. Drive
+  over it and everyone else has to open KY toolkit: for four seconds their
+  steering lags well behind their keys while a progress bar crawls from 1%
+  to 3% to… 99%. Lagged bots mostly just ride straight.
 - Crash on your own (wall, your own trail) and you get a mild *fahhh*.
   Get taken out by someone else and you get the full meme **FAHHHHHHHH!!!**
 
@@ -78,7 +82,7 @@ mute, or pass `-mute`.
 The client uses your OS's own player (`afplay` on macOS, `paplay`/`pw-play`/
 `aplay` on Linux, PowerShell on Windows). To replace a sound, say with a
 recording of the team yelling FAHHH, drop a WAV named after it (`fahhh`,
-`fahhh-meme`, `beep`, `go`, `kill`, `win`, `case`, `harasmus`) into
+`fahhh-meme`, `ky`, `beep`, `go`, `kill`, `win`, `case`, `harasmus`) into
 `~/.config/lightcycles/sounds/` (or your OS's config directory).
 
 ## Leaderboard

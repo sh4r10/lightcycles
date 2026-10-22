@@ -105,3 +105,31 @@ func TestKilledBySetForTrailKills(t *testing.T) {
 		t.Fatalf("a should be marked as killed by b, got %d", a.KilledBy)
 	}
 }
+
+func TestKYToolkitLagsEveryoneElse(t *testing.T) {
+	g, a, b := newTestGame(t)
+	g.ky = &[2]int{6, 5} // right in front of a
+	g.step()
+	if g.ky != nil || a.Lag != 0 || b.Lag != kyLagLen {
+		t.Fatalf("a grabs it, b lags: ky=%v a.Lag=%d b.Lag=%d", g.ky, a.Lag, b.Lag)
+	}
+	g.Turn(b.ID, Up)
+	if len(b.queue) != 0 || len(b.lagged) != 1 {
+		t.Fatalf("b's turn should be held back, queue=%v lagged=%v", b.queue, b.lagged)
+	}
+	for range kyDelay - 1 {
+		g.tick++
+		g.loadLaggedTurns()
+	}
+	if len(b.queue) != 0 {
+		t.Fatalf("turn released too early")
+	}
+	g.tick++
+	g.loadLaggedTurns()
+	if len(b.queue) != 1 || b.queue[0] != Up {
+		t.Fatalf("turn should load after %d ticks, queue=%v", kyDelay, b.queue)
+	}
+	if kyProgress(kyLagLen) != 1 || kyProgress(1) != 99 {
+		t.Fatalf("progress bar should crawl from 1%% to 99%%")
+	}
+}

@@ -131,3 +131,26 @@ func roundStartLines(g *Game) []string {
 	}
 	return out
 }
+
+func kySpawnLine() string {
+	return pick(
+		"A KY toolkit appeared. Do not open it.",
+		"Someone left KY toolkit lying around",
+		"KY toolkit spawned. It's still loading.",
+	)
+}
+
+func kyOpenLine(p *Player) string {
+	return pick(
+		fmt.Sprintf("%s opened KY toolkit for everyone. Loading… still loading…", p.Name),
+		fmt.Sprintf("%s made everyone log into KY toolkit. Good luck steering", p.Name),
+		fmt.Sprintf("%s grabbed KY toolkit. Everyone else: 3%%…", p.Name),
+	)
+}
+
+// kyProgress is the loading bar of a site that never finishes loading.
+func kyProgress(lagLeft int) int {
+	steps := []int{1, 1, 2, 3, 3, 3, 3, 7, 12, 12, 12, 13, 13, 13, 99, 99}
+	i := (kyLagLen - lagLeft) * len(steps) / kyLagLen
+	return steps[min(max(i, 0), len(steps)-1)]
+}

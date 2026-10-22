@@ -184,6 +184,9 @@ func (a *app) sounds(prev, cur *Snapshot) {
 	if me.Wins > was.Wins {
 		play(SndWin)
 	}
+	if me.Lag > 0 && was.Lag == 0 {
+		play(SndKY)
+	}
 	if cur.CaseOwner == me.ID && prev.CaseOwner != me.ID {
 		play(SndCase)
 	}

@@ -17,6 +17,9 @@ const (
 	boostCooldown = 100 // ticks from boost start until it is ready again
 	maxCycles     = 16
 	feedLen       = 6
+	kyEvery       = 300 // ticks between KY toolkit spawns (15s)
+	kyLagLen      = 80  // ticks everyone else spends "loading KY toolkit" (4s)
+	kyDelay       = 12  // how far their steering lags behind, in ticks (0.6s)
 )
 
 // Arena sizes a host can pick. Small fits on one screen; the others scroll
@@ -68,8 +71,15 @@ type Player struct {
 	Kills      int
 	RoundKills int
 	KilledBy   int // who took you out this round, 0 for walls and your own trail
+	Lag        int // ticks left stuck loading KY toolkit
+	lagged     []delayedTurn
 	Boost      int // ticks of boost remaining
 	Cooldown   int // ticks until boost is ready
+}
+
+type delayedTurn struct {
+	d   Dir
+	due int // tick at which the turn finally "loads"
 }
 
 // Settings are chosen by whoever hosts the game.
@@ -109,7 +119,8 @@ type Game struct {
 	nextID    int
 	usedColor [maxCycles]bool
 	onRound   func([]RoundStat)
-	caseOwner int // player ID holding "the case" this round, 0 if none
+	caseOwner int     // player ID holding "the case" this round, 0 if none
+	ky        *[2]int // where the KY toolkit pickup sits, nil if none
 	snap      atomic.Pointer[Snapshot]
 	quit      chan struct{}
 	stopOnce  sync.Once
@@ -300,6 +311,15 @@ func (g *Game) Turn(id int, d Dir) {
 	if !ok || !p.InRound || !p.Alive {
 		return
 	}
+	// KY toolkit is extremely slow: your input arrives when it arrives.
+	if p.Lag > 0 {
+		p.lagged = append(p.lagged, delayedTurn{d, g.tick + kyDelay})
+		return
+	}
+	g.enqueue(p, d)
+}
+
+func (g *Game) enqueue(p *Player, d Dir) {
 	last := p.Dir
 	if len(p.queue) > 0 {
 		last = p.queue[len(p.queue)-1]
@@ -403,6 +423,7 @@ func (g *Game) startRound() {
 	}
 
 	clear(g.grid)
+	g.ky = nil
 	sp := g.spawns()
 	order := rand.Perm(len(sp))
 	i := 0
@@ -413,6 +434,7 @@ func (g *Game) startRound() {
 		p.queue = nil
 		p.Alive, p.InRound = true, true
 		p.Boost, p.Cooldown, p.RoundKills, p.KilledBy = 0, 0, 0, 0
+		p.Lag, p.lagged = 0, nil
 		g.set(p.X, p.Y, p.ID)
 	}
 	g.round++
@@ -456,8 +478,12 @@ func (g *Game) step() {
 		}
 	case Playing:
 		g.tick++
+		g.loadLaggedTurns()
 		g.moveAll()
 		g.chatter()
+		if g.ky == nil && g.tick%kyEvery == kyEvery/2 {
+			g.spawnKY()
+		}
 		g.checkRoundOver()
 	case RoundOver:
 		g.phaseLeft--
@@ -495,10 +521,12 @@ func (g *Game) moveAll() {
 		} else if g.tick%2 != 0 || (p.Kind == KindMitdk && g.tick%4 != 0) {
 			continue
 		}
-		switch p.Kind {
-		case KindHarasmus:
+		// Lagged bots mostly can't think either; they just ride on.
+		switch {
+		case p.Bot && p.Lag > 0 && rand.Intn(4) != 0:
+		case p.Kind == KindHarasmus:
 			g.harasmusThink(p)
-		case KindBot, KindMitdk, KindAIBro:
+		case p.Bot:
 			g.botThink(p)
 		}
 		if len(p.queue) > 0 {
@@ -551,6 +579,9 @@ func (g *Game) moveAll() {
 		}
 		m.p.X, m.p.Y = m.x, m.y
 		g.set(m.x, m.y, m.p.ID)
+		if g.ky != nil && g.ky[0] == m.x && g.ky[1] == m.y {
+			g.openKY(m.p)
+		}
 	}
 	// Dead cycles' trails vanish, opening up the arena mid-round.
 	for id := range dead {
@@ -579,6 +610,52 @@ func (g *Game) passCase(from, to *Player) {
 	}
 	g.caseOwner = to.ID
 	g.pushFeed(caseMovedLine(from, to))
+}
+
+// loadLaggedTurns lets through the turns whose "page load" has finished.
+func (g *Game) loadLaggedTurns() {
+	for _, p := range g.players {
+		if p.Lag > 0 {
+			p.Lag--
+		}
+		for len(p.lagged) > 0 && p.lagged[0].due <= g.tick {
+			g.enqueue(p, p.lagged[0].d)
+			p.lagged = p.lagged[1:]
+		}
+	}
+}
+
+// spawnKY drops the pickup on an empty cell well away from every head.
+func (g *Game) spawnKY() {
+	for range 50 {
+		x, y := 2+rand.Intn(g.W-4), 2+rand.Intn(g.H-4)
+		if g.at(x, y) != 0 {
+			continue
+		}
+		free := true
+		for _, p := range g.players {
+			if p.InRound && p.Alive && abs(p.X-x)+abs(p.Y-y) < 6 {
+				free = false
+			}
+		}
+		if free {
+			g.ky = &[2]int{x, y}
+			g.pushFeed(kySpawnLine())
+			return
+		}
+	}
+}
+
+// openKY is what happens when someone drives over the pickup: everyone
+// else has to open KY toolkit and their steering lags for a while.
+func (g *Game) openKY(by *Player) {
+	g.ky = nil
+	for _, p := range g.players {
+		if p != by && p.InRound && p.Alive {
+			p.Lag = kyLagLen
+		}
+	}
+	g.pushFeed(kyOpenLine(by))
 }
 
 // chatter has a living AI bro say something every eight seconds or so.
@@ -756,6 +833,7 @@ type Snapshot struct {
 	Feed      []string
 	Banner    string
 	CaseOwner int
+	KY        *[2]int
 }
 
 func (s *Snapshot) At(x, y int) int { return s.Grid[y*s.W+x] }
@@ -784,9 +862,13 @@ func (g *Game) publish() {
 		Banner:    g.banner,
 		CaseOwner: g.caseOwner,
 	}
+	if g.ky != nil {
+		ky := *g.ky
+		s.KY = &ky
+	}
 	for _, p := range g.players {
 		cp := *p
-		cp.queue = nil
+		cp.queue, cp.lagged = nil, nil
 		s.Players = append(s.Players, cp)
 	}
 	g.snap.Store(s)
