@@ -1,0 +1,47 @@
+# Podman Quadlet unit for the game server. setup.sh installs two copies for
+# the rootless "lightcycles" user at ~/.config/containers/systemd/:
+# lightcycles-blue (host port 2301) and lightcycles-green (2302).
+# lightcycles-update starts them and decides which one gets new players.
+# @REPO@ is the image repository, e.g. docker.io/sh4r10/lightcycles.
+[Unit]
+Description=Light Cycles game server (@COLOR@)
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=lightcycles-@COLOR@
+Image=@REPO@:latest
+# The leaderboard, host key, backups and custom sounds live in this volume,
+# shared by both colours (SQLite runs in WAL mode, so both can have it open).
+# The player allowlist is mounted read-only from the host. Keys listed there
+# get in without the password.
+Volume=lightcycles-data:/data:U,Z
+Volume=%h/players:/config/players:ro,Z
+# Secrets, created by setup.sh and kept out of the repo:
+#   LIGHTCYCLES_JOIN_PASSWORD   players without a listed key join with this
+#   LIGHTCYCLES_ADMIN_PASSWORD  enables the admin console (ssh admin@host)
+EnvironmentFile=%h/lightcycles.env
+Exec=serve -db /data/lightcycles.db -key /data/host_ed25519 -sounds /data/sounds -allow-keys /config/players
+# lightcycles-update forwards public ports 22 and 2222 here when this
+# colour is live.
+PublishPort=@PORT@:2222
+LogDriver=journald
+
+# Lock the container down: the image has no shell, runs as uid 65532, and
+# gets no capabilities, no writable root filesystem and no privilege
+# escalation.
+User=65532:65532
+ReadOnly=true
+DropCapability=ALL
+NoNewPrivileges=true
+PodmanArgs=--memory=512m --pids-limit=256 --cpus=1
+
+# Stopping drains: players already connected keep playing until they leave,
+# for up to 30 minutes (the server's -drain default), before podman kills it.
+PodmanArgs=--stop-timeout=1860
+
+[Service]
+Restart=on-failure
+# The first start pulls the image.
+TimeoutStartSec=300
+TimeoutStopSec=1900

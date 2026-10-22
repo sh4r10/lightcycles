@@ -1,0 +1,9 @@
+# Installed by deploy/setup.sh as /etc/fail2ban/jail.d/lightcycles-sshd.local.
+[sshd]
+enabled = true
+backend = systemd
+# setup.sh sets this to the admin SSH port.
+port = ssh
+maxretry = 5
+findtime = 10m
+bantime = 1h

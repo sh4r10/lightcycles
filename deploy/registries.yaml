@@ -1,0 +1,5 @@
+# Tell podman to look for cosign signatures next to the image. @REPO@ is
+# filled in at install time (e.g. docker.io/sh4r10/lightcycles).
+docker:
+  @REPO@:
+    use-sigstore-attachments: true

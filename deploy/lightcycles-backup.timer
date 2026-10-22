@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Light Cycles leaderboard backup
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

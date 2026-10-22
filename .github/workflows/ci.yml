@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  # On pull requests, check the image builds for both architectures without
+  # pushing anything (no secrets needed).
+  image-check:
+    if: github.event_name == 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      KO_DOCKER_REPO: ko.local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: ko-build/setup-ko@v0.9
+      - run: ko build --bare --push=false .
+
+  # Builds the server image with ko, pushes it to Docker Hub and signs it.
+  # The server pulls new images itself and refuses any image not signed with
+  # this key, so CI never needs access to the server, and a leaked Docker Hub
+  # token alone can't get code onto it.
+  #
+  # Needs the repo variable DOCKERHUB_USERNAME and the secrets DOCKERHUB_TOKEN
+  # (read/write), COSIGN_PRIVATE_KEY and COSIGN_PASSWORD.
+  image:
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      KO_DOCKER_REPO: docker.io/${{ vars.DOCKERHUB_USERNAME }}/lightcycles
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Writes ~/.docker/config.json, which both ko and cosign use.
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: ko-build/setup-ko@v0.9
+      # Podman reads cosign's classic ".sig" attachments; cosign v3 writes a
+      # new bundle format by default, so stay on v2.
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.6.5
+      # Tagged latest (what the server follows) and with the commit, so any
+      # build can be found again.
+      - name: Build and push
+        run: ko build --bare --tags latest,${{ github.sha }} --image-refs ref.txt .
+      - name: Sign
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        # No transparency log upload: the server checks the signature against
+        # our own public key, not Rekor, and this keeps the repo name private.
+        run: cosign sign --yes --recursive --tlog-upload=false --key env://COSIGN_PRIVATE_KEY "$(cat ref.txt)"

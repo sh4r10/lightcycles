@@ -1,0 +1,15 @@
+# ko builds the server image: a static Go binary on a distroless base with no
+# shell, running as an unprivileged user (uid 65532).
+defaultBaseImage: cgr.dev/chainguard/static:latest
+defaultPlatforms:
+  - linux/amd64
+  - linux/arm64
+builds:
+  - id: lightcycles
+    main: .
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w

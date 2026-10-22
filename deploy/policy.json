@@ -1,0 +1,15 @@
+{
+  "default": [{ "type": "reject" }],
+  "transports": {
+    "docker": {
+      "@REPO@": [
+        {
+          "type": "sigstoreSigned",
+          "keyPath": "/home/lightcycles/.config/containers/cosign.pub",
+          "signedIdentity": { "type": "matchRepository" }
+        }
+      ]
+    },
+    "containers-storage": { "": [{ "type": "insecureAcceptAnything" }] }
+  }
+}

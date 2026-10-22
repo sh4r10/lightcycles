@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up the Light Cycles leaderboard
+
+[Service]
+Type=oneshot
+# Runs in whichever colour is live (lightcycles-update records it). $$ is
+# systemd for a literal $.
+ExecStart=/bin/sh -c 'exec /usr/bin/podman exec "lightcycles-$$(cat /var/lib/lightcycles-deploy/active)" /ko-app/lightcycles backup -db /data/lightcycles.db -dir /data/backups -keep 14'
