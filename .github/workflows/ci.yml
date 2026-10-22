@@ -19,6 +19,22 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
+  # On pull requests, check the image builds for both architectures without
+  # pushing anything (no secrets needed).
+  image-check:
+    if: github.event_name == 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      KO_DOCKER_REPO: ko.local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: ko-build/setup-ko@v0.9
+      - run: ko build --bare --push=false .
+
   # Builds the server image with ko, pushes it to Docker Hub and signs it.
   # The server pulls new images itself and refuses any image not signed with
   # this key, so CI never needs access to the server, and a leaked Docker Hub
