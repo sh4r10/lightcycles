@@ -172,7 +172,11 @@ func (a *app) sounds(prev, cur *Snapshot) {
 		play(SndGo)
 	}
 	if was.Alive && !me.Alive && me.InRound {
-		play(SndFahhh)
+		if me.KilledBy != 0 {
+			play(SndFahhhMax)
+		} else {
+			play(SndFahhh)
+		}
 	}
 	if me.Kills > was.Kills {
 		play(SndKill)

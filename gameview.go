@@ -160,7 +160,11 @@ func (v *gameView) renderHeader(me *Player) string {
 		status = st.bold.Render(fmt.Sprintf("Get ready… %d", secs(s.PhaseLeft))) + st.dim.Render("   your cycle is the flashing ") +
 			st.cycle[me.Color].Bold(true).Render(colorNames[me.Color]) + st.dim.Render(" one")
 	case !me.Alive:
-		status = st.fahhh.Render("FAHHH!") + st.dim.Render(" You crashed. Spectating the rest of the round · TAB to switch view")
+		if k := s.Player(me.KilledBy); k != nil {
+			status = st.fahhh.Render("FAHHHHHHHH!!!") + st.dim.Render(" "+k.Name+" got you. Spectating · TAB to switch view")
+		} else {
+			status = st.fahhh.Render("fahhh.") + st.dim.Render(" You crashed. Spectating the rest of the round · TAB to switch view")
+		}
 	default:
 		alive := 0
 		for _, p := range s.Players {

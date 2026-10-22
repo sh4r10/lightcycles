@@ -96,3 +96,12 @@ func TestRosterAndMitdkSpeed(t *testing.T) {
 		t.Fatalf("mitdk should move every 4th tick: %d moves in 8 ticks", moves)
 	}
 }
+
+func TestKilledBySetForTrailKills(t *testing.T) {
+	g, a, b := newTestGame(t)
+	g.set(6, 5, b.ID)
+	g.step()
+	if a.KilledBy != b.ID {
+		t.Fatalf("a should be marked as killed by b, got %d", a.KilledBy)
+	}
+}

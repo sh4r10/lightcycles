@@ -24,19 +24,20 @@ import (
 type Sound string
 
 const (
-	SndBeep     Sound = "beep"     // countdown
-	SndGo       Sound = "go"       // round starts
-	SndFahhh    Sound = "fahhh"    // you crashed
-	SndKill     Sound = "kill"     // someone hit your trail
-	SndWin      Sound = "win"      // you won the round
-	SndCase     Sound = "case"     // you've been assigned the case
-	SndHarasmus Sound = "harasmus" // HARASMUS is right behind you
+	SndBeep     Sound = "beep"       // countdown
+	SndGo       Sound = "go"         // round starts
+	SndFahhh    Sound = "fahhh"      // you crashed on your own (wall, own trail)
+	SndFahhhMax Sound = "fahhh-meme" // someone else took you out
+	SndKill     Sound = "kill"       // someone hit your trail
+	SndWin      Sound = "win"        // you won the round
+	SndCase     Sound = "case"       // you've been assigned the case
+	SndHarasmus Sound = "harasmus"   // HARASMUS is right behind you
 )
 
-var allSounds = []Sound{SndBeep, SndGo, SndFahhh, SndKill, SndWin, SndCase, SndHarasmus}
+var allSounds = []Sound{SndBeep, SndGo, SndFahhh, SndFahhhMax, SndKill, SndWin, SndCase, SndHarasmus}
 
 // bellSounds are the ones worth a terminal bell for plain ssh players.
-var bellSounds = map[Sound]bool{SndFahhh: true, SndWin: true}
+var bellSounds = map[Sound]bool{SndFahhh: true, SndFahhhMax: true, SndWin: true}
 
 const (
 	oscPrefix = "\x1b]7770;lightcycles:"
@@ -182,36 +183,66 @@ func synth(s Sound) []float64 {
 		return out
 	case SndFahhh:
 		return fahhh()
+	case SndFahhhMax:
+		return fahhhMeme()
 	}
 	return nil
 }
 
-// fahhh is a crude vocal "FAHHH": a burst of breathy noise for the F, then
+// fahhh is a crude vocal "fahhh": a burst of breathy noise for the F, then
 // an "ahh" vowel (a falling pitch shaped by /a/ formants) that trails off.
+// It's the mild one, for crashing on your own.
 func fahhh() []float64 {
-	n := samples(0.85)
-	out := make([]float64, n)
-	fN := samples(0.12)
+	return voice(0.85, 0.12, 0.25, func(t float64) float64 { return 210 - 90*t },
+		func(t float64) float64 { return math.Min(1, t*20) * math.Exp(-t*2.2) }, 1)
+}
+
+// fahhhMeme is the full meme FAHHHHH, for when someone else takes you out:
+// a hard F, a higher strained pitch with a shaky vibrato, held at full
+// volume and overdriven before it finally collapses.
+func fahhhMeme() []float64 {
+	const dur = 1.5
+	pitch := func(t float64) float64 {
+		f := 330 + 40*math.Min(t/0.2, 1) // strains upward first
+		if t > 1.0 {
+			f -= 160 * (t - 1.0) // then the voice gives out
+		}
+		return f + 14*math.Sin(2*math.Pi*6.5*t)
+	}
+	env := func(t float64) float64 {
+		vt := dur - 0.18 - t
+		return math.Min(1, t*40) * math.Min(1, math.Max(vt, 0)*3.5)
+	}
+	return voice(dur, 0.18, 0.6, pitch, env, 3.5)
+}
+
+// voice synthesises an F then an "ahh". drive > 1 overdrives it.
+func voice(dur, fDur, fVol float64, pitch, env func(t float64) float64, drive float64) []float64 {
+	out := make([]float64, samples(dur))
+	fN := samples(fDur)
 	formant := func(f float64) float64 {
 		g := func(c, w float64) float64 { return math.Exp(-math.Pow((f-c)/w, 2)) }
 		return g(750, 120) + 0.6*g(1150, 140) + 0.25*g(2600, 250)
 	}
 	phase := 0.0
 	for i := range out {
-		t := float64(i) / sampleRate
 		if i < fN {
-			out[i] = (rand.Float64()*2 - 1) * 0.25 * float64(i) / float64(fN)
+			out[i] = (rand.Float64()*2 - 1) * fVol * float64(i) / float64(fN)
 			continue
 		}
-		vt := t - float64(fN)/sampleRate
-		f0 := 210 - 90*vt // pitch falls as the scream runs out of breath
+		vt := float64(i-fN) / sampleRate
+		f0 := pitch(vt)
 		phase += 2 * math.Pi * f0 / sampleRate
 		v := 0.0
 		for k := 1.0; k*f0 < 4000; k++ {
 			v += formant(k*f0) * math.Sin(k*phase) / math.Sqrt(k)
 		}
-		env := math.Min(1, vt*20) * math.Exp(-vt*2.2)
-		out[i] = 0.3*v*env + (rand.Float64()*2-1)*0.03*env
+		e := env(vt)
+		x := 0.3*v*e + (rand.Float64()*2-1)*0.03*e
+		if drive > 1 {
+			x = math.Tanh(x*drive) * 0.9
+		}
+		out[i] = x
 	}
 	return out
 }

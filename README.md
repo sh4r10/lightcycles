@@ -64,20 +64,21 @@ get the scoreboard, minimap and feed alongside.
   ME THIS CASE.* Their head turns gold. Kill the holder and the case is
   reassigned to you. Win the round while holding it to close the case,
   which counts in the leaderboard's CASES column.
-- Crash and you get a **FAHHH!**
+- Crash on your own (wall, your own trail) and you get a mild *fahhh*.
+  Get taken out by someone else and you get the full meme **FAHHHHHHHH!!!**
 
 ### Sound
 
 Plain `ssh` players get a terminal bell when they crash or win. The
 built-in client (`lightcycles play`) plays real sounds: countdown beeps, a
-synthesised FAHHH, kill blips, a win jingle, an office phone when you're
+mild fahhh for solo crashes, an overdriven meme FAHHH when someone gets you, kill blips, a win jingle, an office phone when you're
 assigned the case, and a siren when HARASMUS is close. Press `m` in game to
 mute, or pass `-mute`.
 
 The client uses your OS's own player (`afplay` on macOS, `paplay`/`pw-play`/
 `aplay` on Linux, PowerShell on Windows). To replace a sound, say with a
 recording of the team yelling FAHHH, drop a WAV named after it (`fahhh`,
-`beep`, `go`, `kill`, `win`, `case`, `harasmus`) into
+`fahhh-meme`, `beep`, `go`, `kill`, `win`, `case`, `harasmus`) into
 `~/.config/lightcycles/sounds/` (or your OS's config directory).
 
 ## Leaderboard

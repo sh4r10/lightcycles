@@ -67,6 +67,7 @@ type Player struct {
 	Wins       int
 	Kills      int
 	RoundKills int
+	KilledBy   int // who took you out this round, 0 for walls and your own trail
 	Boost      int // ticks of boost remaining
 	Cooldown   int // ticks until boost is ready
 }
@@ -411,7 +412,7 @@ func (g *Game) startRound() {
 		p.X, p.Y, p.Dir = s.x, s.y, s.d
 		p.queue = nil
 		p.Alive, p.InRound = true, true
-		p.Boost, p.Cooldown, p.RoundKills = 0, 0, 0
+		p.Boost, p.Cooldown, p.RoundKills, p.KilledBy = 0, 0, 0, 0
 		g.set(p.X, p.Y, p.ID)
 	}
 	g.round++
@@ -525,6 +526,7 @@ func (g *Game) moveAll() {
 				owner.Kills++
 				owner.RoundKills++
 				killers[m.p.ID] = owner
+				m.p.KilledBy = owner.ID
 				dead[m.p.ID] = deathLine(m.p, owner)
 			}
 		}
@@ -534,6 +536,7 @@ func (g *Game) moveAll() {
 			if a.x == b.x && a.y == b.y {
 				dead[a.p.ID] = fmt.Sprintf("%s and %s collided head-on", a.p.Name, b.p.Name)
 				dead[b.p.ID] = ""
+				a.p.KilledBy, b.p.KilledBy = b.p.ID, a.p.ID
 			}
 		}
 	}
