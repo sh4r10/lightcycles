@@ -6,8 +6,9 @@
 #
 # Run it on the server from a copy of this folder, as your admin user:
 #
-#   sudo ./setup.sh [--admin USER] [--allow PORT]... [--yes]
+#   sudo ./setup.sh [--ssh-port PORT] [--admin USER] [--allow PORT]... [--yes]
 #
+#   --ssh-port N   port to move admin SSH to, freeing 22 for the game (default 2200)
 #   --admin USER   the account you log in with (default: whoever ran sudo)
 #   --allow PORT   another TCP port to keep open (e.g. --allow 443)
 #   --yes          don't ask before enabling the firewall
@@ -17,11 +18,13 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 admin=${SUDO_USER:-}
-game_port=2222
+ssh_port=2200
+game_port=2222 # the container's port; the firewall forwards 22 to it
 extra_ports=()
 assume_yes=false
 while [ $# -gt 0 ]; do
 	case $1 in
+	--ssh-port) ssh_port=$2; shift 2 ;;
 	--admin) admin=$2; shift 2 ;;
 	--allow) extra_ports+=("$2"); shift 2 ;;
 	--yes) assume_yes=true; shift ;;
@@ -75,38 +78,78 @@ admin_home=$(getent passwd "$admin" | cut -d: -f6)
 [ -s "$admin_home/.ssh/authorized_keys" ] || die "$admin has no SSH keys in $admin_home/.ssh/authorized_keys; add one first"
 id -nG "$admin" | grep -qw sudo || die "$admin is not in the sudo group"
 
-say "Hardening SSH (keys only, no root login)"
+say "Moving admin SSH to port $ssh_port (keys only, no root login)"
+[[ $ssh_port =~ ^[0-9]+$ ]] && [ "$ssh_port" != 22 ] && [ "$ssh_port" != "$game_port" ] ||
+	die "--ssh-port must be a number other than 22 and $game_port"
 grep -Eq '^\s*Include\s+/etc/ssh/sshd_config.d/' /etc/ssh/sshd_config ||
 	die "/etc/ssh/sshd_config doesn't include sshd_config.d/; add 'Include /etc/ssh/sshd_config.d/*.conf' at the top"
-install -m 644 "$here/sshd-hardening.conf" /etc/ssh/sshd_config.d/00-lightcycles-hardening.conf
-sshd -t || { rm -f /etc/ssh/sshd_config.d/00-lightcycles-hardening.conf; die "sshd rejected the config; nothing changed"; }
-systemctl reload-or-restart ssh 2>/dev/null || systemctl reload-or-restart sshd
-mapfile -t ssh_ports < <(sshd -T | awk '$1 == "port" {print $2}')
+# Open the new port before sshd moves to it, so a running firewall can't
+# lock you out.
+ufw limit "$ssh_port/tcp" comment ssh >/dev/null
+dropin=/etc/ssh/sshd_config.d/00-lightcycles-hardening.conf
+{ cat "$here/sshd-hardening.conf"; printf 'Port %s\n' "$ssh_port"; } >"$dropin"
+chmod 644 "$dropin"
+undo_ssh() { rm -f "$dropin"; die "$1; SSH config left as it was"; }
+sshd -t || undo_ssh "sshd rejected the config"
+[ "$(sshd -T | awk '$1 == "port" {print $2}')" = "$ssh_port" ] ||
+	undo_ssh "sshd would still listen on other ports; comment out any 'Port' line in /etc/ssh/sshd_config"
+# Ubuntu 24.04 starts sshd from ssh.socket, which keeps listening on 22
+# whatever sshd_config says. Switch to the plain service so the port applies.
+if systemctl is-enabled ssh.socket >/dev/null 2>&1; then
+	systemctl disable --now ssh.socket >/dev/null 2>&1
+	systemctl enable ssh.service >/dev/null 2>&1
+fi
+systemctl restart ssh 2>/dev/null || systemctl restart sshd
+sleep 1
+if ! ss -Htln "sport = :$ssh_port" | grep -q .; then
+	rm -f "$dropin"
+	systemctl restart ssh 2>/dev/null || systemctl restart sshd
+	die "sshd didn't come up on port $ssh_port; moved it back"
+fi
 
 say "Setting up fail2ban for SSH"
-install -m 644 "$here/fail2ban-sshd.local" /etc/fail2ban/jail.d/lightcycles-sshd.local
+sed "s/^port = .*/port = $ssh_port/" "$here/fail2ban-sshd.local" >/etc/fail2ban/jail.d/lightcycles-sshd.local
 systemctl enable fail2ban >/dev/null
 systemctl restart fail2ban
 
-say "Configuring the firewall"
-for p in "${ssh_ports[@]}"; do ufw limit "$p/tcp" comment ssh >/dev/null; done
+say "Configuring the firewall (game on 22, admin SSH on $ssh_port)"
 ufw allow "$game_port/tcp" comment lightcycles >/dev/null
 for p in "${extra_ports[@]}"; do ufw allow "$p/tcp" >/dev/null; done
-if ! ufw status | grep -q '^Status: active'; then
+# Forward port 22 to the game. Rootless podman can't bind ports below 1024,
+# and a redirect is narrower than letting every user bind them.
+for f in /etc/ufw/before.rules /etc/ufw/before6.rules; do
+	grep -q 'BEGIN lightcycles' "$f" && continue
+	tmp=$(mktemp)
+	{
+		echo "# BEGIN lightcycles: forward the game's public port 22 to the container"
+		echo "*nat"
+		echo ":PREROUTING ACCEPT [0:0]"
+		echo "-A PREROUTING -p tcp --dport 22 -j REDIRECT --to-ports $game_port"
+		echo "COMMIT"
+		echo "# END lightcycles"
+		echo
+		cat "$f"
+	} >"$tmp"
+	cat "$tmp" >"$f"
+	rm -f "$tmp"
+done
+if ufw status | grep -q '^Status: active'; then
+	ufw reload >/dev/null
+else
 	# Anything else listening publicly would be cut off, so list it first.
-	keep=" ${ssh_ports[*]} $game_port ${extra_ports[*]} "
+	keep=" $ssh_port 22 $game_port ${extra_ports[*]} "
 	others=$(ss -Htln | awk '{print $4}' | grep -Ev '^(127\.|\[::1\]|\[?::ffff:127\.)' |
 		sed 's/.*://' | sort -un | while read -r p; do [[ $keep == *" $p "* ]] || echo "$p"; done)
 	if [ -n "$others" ]; then
 		echo "These ports are listening but will be blocked:" $others
 		echo "Re-run with --allow PORT for any that should stay open."
 	fi
-	if confirm "Enable the firewall now (incoming: SSH ${ssh_ports[*]}, game $game_port${extra_ports:+, ${extra_ports[*]}})?"; then
+	if confirm "Enable the firewall now (incoming: SSH $ssh_port, game 22 and $game_port${extra_ports:+, ${extra_ports[*]}})?"; then
 		ufw default deny incoming >/dev/null
 		ufw default allow outgoing >/dev/null
 		ufw --force enable
 	else
-		echo "Skipped. Run 'sudo ufw enable' when you're ready."
+		echo "Skipped. The game is only on $game_port until you run 'sudo ufw enable'."
 	fi
 fi
 if command -v docker >/dev/null; then
@@ -171,7 +214,7 @@ as_lc systemctl --user enable --now podman-auto-update.timer lightcycles-backup.
 
 cat <<EOF
 
-Done. Light Cycles is listening on port $game_port.
+Done. Light Cycles is on port 22 (and $game_port). Admin SSH is now on $ssh_port.
 
   Add players:       sudo nano $lc_home/players   (one public key per line)
   Logs:              lcctl podman logs -f lightcycles
@@ -179,5 +222,5 @@ Done. Light Cycles is listening on port $game_port.
   Backup right now:  lcctl systemctl --user start lightcycles-backup
 
 Before you log out, open a NEW terminal and check you can still log in:
-  ssh $admin@<this server>
+  ssh -p $ssh_port $admin@<this server>
 EOF

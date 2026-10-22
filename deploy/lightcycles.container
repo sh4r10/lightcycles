@@ -12,11 +12,15 @@ Image=ghcr.io/sh4r10/lightcycles:latest
 # policy.json) and rolls back if the new one fails to start.
 AutoUpdate=registry
 # The leaderboard, host key, backups and custom sounds live in this volume.
-# The player allowlist is mounted read-only from the host; drop -allow-keys
-# to let anyone play.
+# The player allowlist is mounted read-only from the host. Keys listed there
+# get in without the password.
 Volume=lightcycles-data:/data:U,Z
 Volume=%h/players:/config/players:ro,Z
+# Players without a listed key join with this password. It's an inside joke,
+# not a secret: anyone who can read this repo can see it.
+Environment=LIGHTCYCLES_PASSWORD=Netcompany123
 Exec=serve -db /data/lightcycles.db -key /data/host_ed25519 -sounds /data/sounds -allow-keys /config/players
+# The host firewall forwards port 22 here (see setup.sh).
 PublishPort=2222:2222
 LogDriver=journald
 

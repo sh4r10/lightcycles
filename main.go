@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"flag"
 	"fmt"
@@ -63,6 +64,7 @@ func serve(args []string) {
 	dbPath := fs.String("db", "lightcycles.db", "SQLite leaderboard file (empty disables the leaderboard)")
 	soundsDir := fs.String("sounds", "sounds", "folder of custom WAVs (e.g. fahhh-meme.wav) sent to built-in clients")
 	allowKeys := fs.String("allow-keys", "", "authorized_keys file of players allowed in (empty lets anyone play); re-read on every login")
+	password := fs.String("password", os.Getenv("LIGHTCYCLES_PASSWORD"), "password players can join with (default $LIGHTCYCLES_PASSWORD; empty means none)")
 	idle := fs.Duration("idle-timeout", 30*time.Minute, "drop connections with no traffic for this long (0 disables)")
 	_ = fs.Parse(args)
 
@@ -80,7 +82,7 @@ func serve(args []string) {
 		wish.WithAddress(net.JoinHostPort(*host, *port)),
 		wish.WithHostKeyPath(*keyPath),
 		wish.WithIdleTimeout(*idle),
-		authOption(*allowKeys),
+		authOption(*allowKeys, *password),
 		wish.WithMiddleware(
 			bubbletea.Middleware(func(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 				return handler(lobby, s)
@@ -109,28 +111,42 @@ func serve(args []string) {
 	_ = s.Shutdown(ctx)
 }
 
-// authOption decides who may connect. Without an allowlist anyone may play:
-// we accept any key so we can tie names to it, and fall back to
-// keyboard-interactive (no prompts) for keyless clients. With one, only the
-// keys in it get in, and keyless clients are turned away.
-func authOption(allowKeys string) ssh.Option {
-	if allowKeys == "" {
+// authOption decides who may connect. With no allowlist and no password
+// anyone may play: we accept any key so we can tie names to it, and fall back
+// to keyboard-interactive (no prompts) for keyless clients. Otherwise a
+// player gets in with a key from the allowlist or with the password; keys
+// that aren't listed are refused so the client moves on to the password.
+func authOption(allowKeys, password string) ssh.Option {
+	if allowKeys == "" && password == "" {
 		return func(s *ssh.Server) error {
 			s.PublicKeyHandler = func(ssh.Context, ssh.PublicKey) bool { return true }
 			s.KeyboardInteractiveHandler = func(ssh.Context, gossh.KeyboardInteractiveChallenge) bool { return true }
 			return nil
 		}
 	}
-	if _, err := os.Stat(allowKeys); err != nil {
-		log.Fatal("could not read the player allowlist", "path", allowKeys, "error", err)
-	}
-	return wish.WithPublicKeyAuth(func(_ ssh.Context, key ssh.PublicKey) bool {
-		ok, err := keyAllowed(allowKeys, key)
-		if err != nil {
-			log.Error("could not read the player allowlist", "path", allowKeys, "error", err)
+	if allowKeys != "" {
+		if _, err := os.Stat(allowKeys); err != nil {
+			log.Fatal("could not read the player allowlist", "path", allowKeys, "error", err)
 		}
-		return ok
-	})
+	}
+	return func(s *ssh.Server) error {
+		s.PublicKeyHandler = func(_ ssh.Context, key ssh.PublicKey) bool {
+			if allowKeys == "" {
+				return false
+			}
+			ok, err := keyAllowed(allowKeys, key)
+			if err != nil {
+				log.Error("could not read the player allowlist", "path", allowKeys, "error", err)
+			}
+			return ok
+		}
+		if password != "" {
+			s.PasswordHandler = func(_ ssh.Context, given string) bool {
+				return subtle.ConstantTimeCompare([]byte(given), []byte(password)) == 1
+			}
+		}
+		return nil
+	}
 }
 
 // keyAllowed reports whether key is listed in an authorized_keys file. The

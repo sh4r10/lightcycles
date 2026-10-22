@@ -19,11 +19,11 @@ holds no SSH keys for it.
 
 | Layer | Protection |
 |---|---|
-| Host login | SSH with keys only. No root login, no passwords, 3 tries per connection. fail2ban bans an IP for an hour after 5 failures. |
+| Host login | Admin SSH moves to its own port (2200 by default) so the game can have 22. Keys only, no root login, no passwords, 3 tries per connection. fail2ban bans an IP for an hour after 5 failures. |
 | Host updates | `unattended-upgrades` installs security updates daily. |
-| Network | `ufw` denies everything incoming except SSH (rate-limited) and the game port 2222. Other ports stay open only if you pass `--allow`. |
+| Network | `ufw` denies all incoming traffic except admin SSH (rate-limited) and the game. Port 22 is forwarded to the game container on 2222, so `ssh host` lands in the game. Other ports stay open only if you pass `--allow`. |
 | Game process | Runs in a container owned by a separate `lightcycles` user that has no login shell and no sudo. Inside the container it runs as uid 65532 with every capability dropped, a read-only filesystem, no privilege escalation, and limits of 512 MB memory, 1 CPU and 256 processes. The image is distroless: no shell, no package manager, just the binary. |
-| Game access | The game's SSH server only runs the game, never a shell or other commands. With `-allow-keys` (on by default here), only the public keys in `~lightcycles/players` can connect. Idle connections drop after 30 minutes. |
+| Game access | The game's SSH server only runs the game, never a shell or other commands. Players get in either with a key listed in `~lightcycles/players` or with the password `Netcompany123` (set in `lightcycles.container`). That password is a joke-level gate, not a secret, and password players' names aren't locked to a key. Idle connections drop after 30 minutes. |
 | Supply chain | The VM only accepts `ghcr.io/sh4r10/lightcycles` images signed with this repo's cosign key, and rejects images from anywhere else. |
 | Secrets | Nothing secret is in the repo. The cosign private key lives in GitHub secrets. The registry token on the VM is read-only (`read:packages`) and stored mode 600 in the `lightcycles` user's home. |
 
@@ -55,31 +55,43 @@ newer. Copy this folder over and run the script as your admin user, not root:
 ```sh
 scp -r deploy you@your-vm:lightcycles-deploy
 ssh you@your-vm
-sudo ./lightcycles-deploy/setup.sh            # add --allow 443 etc. for other services
+sudo ./lightcycles-deploy/setup.sh --ssh-port 2200   # add --allow 443 etc. for other services
 ```
+
+The script opens the new admin port in the firewall first, then moves sshd
+to it and checks that sshd is listening there. If it isn't, it moves sshd
+back. Only then does it forward 22 to the game.
 
 The script asks before enabling the firewall and lists anything else
 listening that would be blocked. It also asks for a GitHub token with only
 the `read:packages` scope so it can pull the private image.
 
 **Before you close that SSH session**, open a second terminal and check that
-you can still log in. Root login and passwords are off from that point on.
+you can still log in with `ssh -p 2200 you@your-vm`. Root login and
+passwords are off from that point on. If you do get locked out, Linode's
+Lish console still works.
 
-Also add a Linode Cloud Firewall (or your provider's equivalent) with the
-same two inbound ports. It's a second layer that sits outside the VM.
+If you use a Linode Cloud Firewall (a good second layer outside the VM),
+allow inbound TCP 22, 2222 and 2200 **before** running the script.
+Otherwise it will block the new admin port.
 
 ### 3. Players
 
-With the allowlist on, add each player's public key (`~/.ssh/id_ed25519.pub`)
-to the file, one per line. It's re-read on every login, so you don't need
-to restart:
+Players join with `ssh yourname@your-vm` and enter `Netcompany123` when
+asked for a password. The built-in client (`lightcycles play your-vm`)
+prompts too, or reads `$LIGHTCYCLES_PASSWORD`.
+
+To skip the password and lock their name to their key, add a player's
+public key (`~/.ssh/id_ed25519.pub`) to the allowlist, one per line. It's
+re-read on every login, so you don't need to restart:
 
 ```sh
 sudo nano ~lightcycles/players
 ```
 
-To let anyone in instead, delete `-allow-keys /config/players` from
-`lightcycles.container`, re-run `setup.sh`, and restart the game.
+To change the password, edit `LIGHTCYCLES_PASSWORD` in
+`lightcycles.container`, re-run `setup.sh`, and restart the game. Removing
+both the password and `-allow-keys` opens the game to anyone.
 
 ## Day to day
 
