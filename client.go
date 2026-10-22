@@ -8,7 +8,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/keygen"
 	gossh "golang.org/x/crypto/ssh"
@@ -79,6 +81,14 @@ func runClient(addr, user string, mute bool) error {
 	}
 	defer client.Close()
 
+	var sounds *player
+	if !mute {
+		sounds = newPlayer(dir)
+	}
+	if sounds != nil {
+		sounds.serverDir = fetchServerSounds(client, filepath.Join(dir, "servers", safeDir(addr)))
+	}
+
 	sess, err := client.NewSession()
 	if err != nil {
 		return err
@@ -96,10 +106,6 @@ func runClient(addr, user string, mute bool) error {
 	termType := os.Getenv("TERM")
 	if termType == "" {
 		termType = "xterm-256color"
-	}
-	var sounds *player
-	if !mute {
-		sounds = newPlayer(dir)
 	}
 	if sounds != nil {
 		// Ask the server for real sound cues instead of terminal bells.
@@ -182,4 +188,35 @@ func trustOnFirstUse(path string) (gossh.HostKeyCallback, error) {
 		}
 		return err
 	}, nil
+}
+
+// fetchServerSounds downloads the server's custom sounds into dir and
+// returns it, or "" if the server has none (or is too old to have any).
+func fetchServerSounds(client *gossh.Client, dir string) string {
+	sess, err := client.NewSession()
+	if err != nil {
+		return ""
+	}
+	defer sess.Close()
+	out, err := sess.StdoutPipe()
+	if err != nil {
+		return ""
+	}
+	if err := sess.Start("sounds"); err != nil {
+		return ""
+	}
+	if err := readSoundPack(out, dir); err != nil {
+		return ""
+	}
+	_ = sess.Wait()
+	return dir
+}
+
+func safeDir(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' || r == '-' {
+			return r
+		}
+		return '_'
+	}, s)
 }

@@ -56,6 +56,7 @@ func serve(args []string) {
 	port := fs.String("port", "2222", "SSH port")
 	keyPath := fs.String("key", ".ssh/lightcycles_ed25519", "host key path (created if missing)")
 	dbPath := fs.String("db", "lightcycles.db", "SQLite leaderboard file (empty disables the leaderboard)")
+	soundsDir := fs.String("sounds", "sounds", "folder of custom WAVs (e.g. fahhh-meme.wav) sent to built-in clients")
 	_ = fs.Parse(args)
 
 	var store *Store
@@ -80,6 +81,7 @@ func serve(args []string) {
 				return handler(lobby, s)
 			}),
 			activeterm.Middleware(),
+			soundPackMiddleware(*soundsDir),
 			logging.Middleware(),
 		),
 	)
@@ -100,6 +102,23 @@ func serve(args []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = s.Shutdown(ctx)
+}
+
+// soundPackMiddleware answers `ssh host sounds` (no PTY) with the server's
+// custom sounds, which the built-in client fetches before it starts.
+func soundPackMiddleware(dir string) wish.Middleware {
+	return func(next ssh.Handler) ssh.Handler {
+		return func(s ssh.Session) {
+			if cmd := s.Command(); len(cmd) == 1 && cmd[0] == "sounds" {
+				if err := writeSoundPack(s, dir); err != nil {
+					log.Error("sending sounds failed", "error", err)
+				}
+				_ = s.Exit(0)
+				return
+			}
+			next(s)
+		}
+	}
 }
 
 // handler runs once per SSH connection and starts the player at the name

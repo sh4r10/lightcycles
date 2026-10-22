@@ -147,25 +147,43 @@ func secs(ticks int) int { return ticks*int(tickRate)/int(time.Second) + 1 }
 func (v *gameView) renderHeader(me *Player) string {
 	st, s := v.st, v.snap
 	info := st.title.Render(s.Settings.Name) +
-		st.dim.Render(fmt.Sprintf(" · %s · round %d · you are ", sizes[s.Settings.Size].Name, s.Round)) +
+		st.dim.Render(fmt.Sprintf(" · %s · round %d · you are ", sizes[s.Settings.Size].Name, max(s.Round, 1))) +
 		st.cycle[me.Color].Bold(true).Render(colorNames[me.Color])
 
 	var status string
 	switch {
 	case s.Phase == Waiting:
 		status = st.bold.Render("Waiting for another player") + st.dim.Render("… bots are off in this game, invite a friend!")
+	case s.Phase == Ready:
+		var names []string
+		for _, p := range v.ranked() {
+			if p.Bot {
+				continue
+			}
+			mark := st.dim.Render(p.Name + " …")
+			if p.Ready {
+				mark = st.cycle[p.Color].Bold(true).Render(p.Name + " ✓")
+			}
+			names = append(names, mark)
+		}
+		ask := st.key.Render("ENTER") + st.dim.Render(" to ready up")
+		if me.Ready {
+			ask = st.bold.Render("You're ready") + st.dim.Render(" (ENTER to undo)")
+		}
+		status = ask + st.dim.Render(fmt.Sprintf(" · round %d starts when everyone is, or in %ds · ", s.Round+1, secs(s.PhaseLeft))) +
+			strings.Join(names, st.dim.Render(", "))
 	case s.Phase == RoundOver:
 		status = st.banner.Render(s.Banner) + st.dim.Render(fmt.Sprintf("  next round in %d", secs(s.PhaseLeft)))
 	case !me.InRound:
-		status = st.dim.Render("Spectating, you'll join at the start of the next round · TAB to switch view")
+		status = st.dim.Render("You'll join at the start of the next round. ") + v.watching()
 	case s.Phase == Countdown:
 		status = st.bold.Render(fmt.Sprintf("Get ready… %d", secs(s.PhaseLeft))) + st.dim.Render("   your cycle is the flashing ") +
 			st.cycle[me.Color].Bold(true).Render(colorNames[me.Color]) + st.dim.Render(" one")
 	case !me.Alive:
 		if k := s.Player(me.KilledBy); k != nil {
-			status = st.fahhh.Render("FAHHHHHHHH!!!") + st.dim.Render(" "+k.Name+" got you. Spectating · TAB to switch view")
+			status = st.fahhh.Render("FAHHHHHHHH!!!") + st.dim.Render(" "+k.Name+" got you. ") + v.watching()
 		} else {
-			status = st.fahhh.Render("fahhh.") + st.dim.Render(" You crashed. Spectating the rest of the round · TAB to switch view")
+			status = st.fahhh.Render("fahhh.") + st.dim.Render(" You crashed. ") + v.watching()
 		}
 	default:
 		alive := 0
@@ -422,6 +440,15 @@ func (v *gameView) renderFooter(me *Player) string {
 		sound = "m unmute"
 	}
 	return st.dim.Render("arrows/WASD steer · SPACE boost ") + boost + st.dim.Render(" · "+sound+" · q back to lobby")
+}
+
+// watching says whose cycle the spectator camera is following.
+func (v *gameView) watching() string {
+	t := v.target()
+	if t == nil || t.ID == v.pid || !t.Alive {
+		return v.st.dim.Render("Spectating")
+	}
+	return v.st.bold.Render("SPECTATING ") + v.st.cycle[t.Color].Bold(true).Render(t.Name) + v.st.dim.Render(" · TAB to watch someone else")
 }
 
 // harasmusNear reports whether HARASMUS is hunting within a few cells.

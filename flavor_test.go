@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -67,7 +69,9 @@ func TestClosingTheCaseIsRecorded(t *testing.T) {
 func TestRosterAndMitdkSpeed(t *testing.T) {
 	g := NewGame("r", Settings{Size: 1, MaxPlayers: 8, Bots: true}, nil)
 	g.Join("shsh")
-	g.step() // Waiting → Countdown, bots join
+	g.step() // Waiting → Ready
+	readyAll(g)
+	g.step() // Ready → Countdown, bots join
 	kinds := map[Kind]int{}
 	for _, p := range g.players {
 		kinds[p.Kind]++
@@ -131,5 +135,29 @@ func TestKYToolkitLagsEveryoneElse(t *testing.T) {
 	}
 	if kyProgress(kyLagLen) != 1 || kyProgress(1) != 99 {
 		t.Fatalf("progress bar should crawl from 1%% to 99%%")
+	}
+}
+
+func TestSoundPackRoundTrip(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	wavData := wav(synth(SndBeep))
+	if err := os.WriteFile(filepath.Join(src, "fahhh-meme.wav"), wavData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(src, "not-a-sound.wav"), []byte("x"), 0o644)
+	var pack bytes.Buffer
+	if err := writeSoundPack(&pack, src); err != nil {
+		t.Fatal(err)
+	}
+	if err := readSoundPack(&pack, dst); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(dst)
+	if len(entries) != 1 || entries[0].Name() != "fahhh-meme.wav" {
+		t.Fatalf("only known sounds should come across, got %v", entries)
+	}
+	got, _ := os.ReadFile(filepath.Join(dst, "fahhh-meme.wav"))
+	if !bytes.Equal(got, wavData) {
+		t.Fatalf("sound changed in transit")
 	}
 }

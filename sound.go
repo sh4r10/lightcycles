@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
 	"encoding/binary"
 	"io"
@@ -91,9 +92,10 @@ func (f *soundFilter) Write(p []byte) (int, error) {
 // player plays sounds with whatever audio tool the OS already has, so the
 // client needs no cgo or audio libraries.
 type player struct {
-	dir  string
-	cmd  []string
-	once sync.Once
+	dir       string // the player's own sounds; these win
+	serverDir string // sounds the server shipped us, if any
+	cmd       []string
+	once      sync.Once
 }
 
 func newPlayer(configDir string) *player {
@@ -125,9 +127,12 @@ func (p *player) Play(s Sound) {
 		return
 	}
 	p.once.Do(p.writeDefaults)
-	path := filepath.Join(p.dir, string(s)+".wav")
-	if _, err := os.Stat(path); err != nil {
-		path = filepath.Join(p.dir, "default", string(s)+".wav")
+	path := filepath.Join(p.dir, "default", string(s)+".wav")
+	for _, dir := range []string{p.dir, p.serverDir} {
+		if f := filepath.Join(dir, string(s)+".wav"); dir != "" && fileExists(f) {
+			path = f
+			break
+		}
 	}
 	cmd := exec.Command(p.cmd[0], append(p.cmd[1:], path)...)
 	if cmd.Start() == nil {
@@ -302,3 +307,69 @@ func wav(samples []float64) []byte {
 }
 
 func samples(dur float64) int { return int(dur * sampleRate) }
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+const maxSoundSize = 4 << 20
+
+// Server-supplied sounds: whoever runs the server can put WAVs named after
+// the sounds (fahhh-meme.wav, …) in its sounds folder, and every built-in
+// client that connects downloads and plays them. That keeps clips like the
+// real FAHHH meme on your own server instead of in the public repo.
+
+// writeSoundPack writes the server's custom sounds as a tar stream.
+func writeSoundPack(w io.Writer, dir string) error {
+	tw := tar.NewWriter(w)
+	for _, s := range allSounds {
+		path := filepath.Join(dir, string(s)+".wav")
+		data, err := os.ReadFile(path)
+		if err != nil || len(data) > maxSoundSize {
+			continue
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: string(s) + ".wav", Mode: 0o644, Size: int64(len(data))}); err != nil {
+			return err
+		}
+		if _, err := tw.Write(data); err != nil {
+			return err
+		}
+	}
+	return tw.Close()
+}
+
+// readSoundPack replaces dir's contents with the sounds in a pack, keeping
+// only files named after a known sound.
+func readSoundPack(r io.Reader, dir string) error {
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	known := map[string]bool{}
+	for _, s := range allSounds {
+		known[string(s)+".wav"] = true
+	}
+	tr := tar.NewReader(r)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !known[h.Name] || h.Size > maxSoundSize {
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(tr, maxSoundSize))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, h.Name), data, 0o644); err != nil {
+			return err
+		}
+	}
+}
