@@ -31,6 +31,8 @@ type styles struct {
 	title  lipgloss.Style
 	banner lipgloss.Style
 	sel    lipgloss.Style
+	caseHd lipgloss.Style // head of whoever holds the case
+	fahhh  lipgloss.Style
 	err    lipgloss.Style
 	key    lipgloss.Style
 }
@@ -44,6 +46,8 @@ func newStyles(r *lipgloss.Renderer) styles {
 		title:  r.NewStyle().Bold(true).Foreground(lipgloss.Color("#00d7ff")),
 		banner: r.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Background(lipgloss.Color("#5f00af")).Padding(0, 1),
 		sel:    r.NewStyle().Bold(true).Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#00d7ff")),
+		caseHd: r.NewStyle().Bold(true).Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#ffd700")),
+		fahhh:  r.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Background(lipgloss.Color("#d70000")).Padding(0, 1),
 		err:    r.NewStyle().Foreground(lipgloss.Color("#ff5f5f")),
 		key:    r.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffd75f")),
 	}
@@ -61,6 +65,7 @@ type gameView struct {
 	pid      int
 	spectate int // player ID being followed while you're out
 	snap     *Snapshot
+	muted    bool
 	width    int
 	height   int
 	st       *styles
@@ -114,6 +119,9 @@ func (v *gameView) View() string {
 	}
 	vw := min(v.snap.W, cols/2)
 	vh := min(v.snap.H, v.height-5)
+	if !side {
+		vh = min(v.snap.H, v.height-6) // room for the newest feed line
+	}
 
 	board := v.renderBoard(vw, vh)
 	header := v.renderHeader(me)
@@ -125,7 +133,11 @@ func (v *gameView) View() string {
 			footer,
 		)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, header, board, footer)
+	last := ""
+	if n := len(v.snap.Feed); n > 0 {
+		last = v.st.dim.Render(trunc(v.snap.Feed[n-1], v.width-1))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, header, board, last, footer)
 }
 
 func secs(ticks int) int { return ticks*int(tickRate)/int(time.Second) + 1 }
@@ -148,7 +160,11 @@ func (v *gameView) renderHeader(me *Player) string {
 		status = st.bold.Render(fmt.Sprintf("Get ready… %d", secs(s.PhaseLeft))) + st.dim.Render("   your cycle is the flashing ") +
 			st.cycle[me.Color].Bold(true).Render(colorNames[me.Color]) + st.dim.Render(" one")
 	case !me.Alive:
-		status = st.dim.Render("You crashed! Spectating the rest of the round · TAB to switch view")
+		if k := s.Player(me.KilledBy); k != nil {
+			status = st.fahhh.Render("FAHHHHHHHH!!!") + st.dim.Render(" "+k.Name+" got you. Spectating · TAB to switch view")
+		} else {
+			status = st.fahhh.Render("fahhh.") + st.dim.Render(" You crashed. Spectating the rest of the round · TAB to switch view")
+		}
 	default:
 		alive := 0
 		for _, p := range s.Players {
@@ -157,6 +173,11 @@ func (v *gameView) renderHeader(me *Player) string {
 			}
 		}
 		status = st.bold.Render("GO!") + st.dim.Render(fmt.Sprintf("  %d cycles left", alive))
+		if v.harasmusNear(me) {
+			status += "  " + st.fahhh.Render("HARASMUS is right behind you!")
+		} else if s.CaseOwner == me.ID {
+			status += "  " + st.caseHd.Render(" you hold the case ") + st.dim.Render(" win to close it")
+		}
 	}
 	return info + "\n" + status
 }
@@ -225,7 +246,11 @@ func (v *gameView) renderBoard(vw, vh int) string {
 					if p.ID == v.pid && flash {
 						glyph = "  "
 					}
-					b.WriteString(st.heads[p.Color].Render(glyph))
+					hs := st.heads[p.Color]
+					if p.ID == s.CaseOwner {
+						hs = st.caseHd
+					}
+					b.WriteString(hs.Render(glyph))
 					run++
 					break
 				}
@@ -269,13 +294,17 @@ func (v *gameView) renderSidePanel(minimap bool) string {
 	b.WriteString(st.bold.Render("SCOREBOARD") + st.dim.Render("        wins kills") + "\n")
 	rows--
 	ranked := v.ranked()
-	maxRows := min(len(ranked), max(rows-feedLen-2, 3))
+	// Give the feed at least 8 lines; the jokes need room.
+	maxRows := min(len(ranked), max(rows-10, 3))
 	for i, p := range ranked {
 		if i >= maxRows {
 			b.WriteString(st.dim.Render(fmt.Sprintf("  …and %d more", len(ranked)-maxRows)) + "\n")
 			break
 		}
 		mark := "■"
+		if p.ID == v.snap.CaseOwner {
+			mark = "§"
+		}
 		if p.InRound && !p.Alive {
 			mark = "✕"
 		}
@@ -287,8 +316,17 @@ func (v *gameView) renderSidePanel(minimap bool) string {
 		b.WriteString(s.Render(row) + "\n")
 	}
 	b.WriteString("\n" + st.bold.Render("FEED") + "\n")
+	rows -= min(len(ranked), maxRows+1) + 2
+	// Newest lines last, wrapped, keeping as many recent ones as fit.
+	var lines []string
 	for _, f := range v.snap.Feed {
-		b.WriteString(st.dim.Render(trunc(f, sideW)) + "\n")
+		lines = append(lines, strings.Split(lipgloss.NewStyle().Width(sideW).Render(f), "\n")...)
+	}
+	if len(lines) > rows {
+		lines = lines[len(lines)-max(rows, 0):]
+	}
+	for _, l := range lines {
+		b.WriteString(st.dim.Render(strings.TrimRight(l, " ")) + "\n")
 	}
 	return b.String()
 }
@@ -361,7 +399,24 @@ func (v *gameView) renderFooter(me *Player) string {
 		filled := (boostCooldown - me.Cooldown) * 10 / boostCooldown
 		boost = st.dim.Render(strings.Repeat("▰", filled) + strings.Repeat("▱", 10-filled))
 	}
-	return st.dim.Render("arrows/WASD steer · SPACE boost ") + boost + st.dim.Render(" · q back to lobby")
+	sound := "m mute"
+	if v.muted {
+		sound = "m unmute"
+	}
+	return st.dim.Render("arrows/WASD steer · SPACE boost ") + boost + st.dim.Render(" · "+sound+" · q back to lobby")
+}
+
+// harasmusNear reports whether HARASMUS is hunting within a few cells.
+func (v *gameView) harasmusNear(me *Player) bool {
+	if me == nil || !me.Alive || !me.InRound || v.snap.Phase != Playing {
+		return false
+	}
+	for _, p := range v.snap.Players {
+		if p.Kind == KindHarasmus && p.Alive && p.InRound && abs(p.X-me.X)+abs(p.Y-me.Y) <= 6 {
+			return true
+		}
+	}
+	return false
 }
 
 func trunc(s string, n int) string {

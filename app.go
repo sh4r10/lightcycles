@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,19 @@ type session struct {
 	name string
 	game *Game
 	pid  int
+
+	out       io.Writer // the player's terminal, for sounds
+	richSound bool      // the built-in client: send real sounds, not bells
+}
+
+func (s *session) play(snd Sound) {
+	switch {
+	case s.out == nil:
+	case s.richSound:
+		_, _ = s.out.Write(soundSequence(snd))
+	case bellSounds[snd]:
+		_, _ = s.out.Write([]byte{'\a'})
+	}
 }
 
 func (s *session) close(l *Lobby) {
@@ -74,7 +88,8 @@ type app struct {
 	top  []Stat
 	mine Stat
 
-	view gameView
+	view         gameView
+	lastHarasmus time.Time
 }
 
 func newApp(r *lipgloss.Renderer, l *Lobby, sess *session, user, keyFP string) app {
@@ -130,9 +145,51 @@ func (a *app) refresh() {
 	case scrGame:
 		a.sess.mu.Lock()
 		if a.sess.game != nil {
+			prev := a.view.snap
 			a.view.snap = a.sess.game.Snapshot()
+			if prev != nil && prev.ID == a.view.snap.ID {
+				a.sounds(prev, a.view.snap)
+			}
 		}
 		a.sess.mu.Unlock()
+	}
+}
+
+// sounds works out what just happened to this player between two frames.
+func (a *app) sounds(prev, cur *Snapshot) {
+	if a.view.muted {
+		return
+	}
+	was, me := prev.Player(a.view.pid), cur.Player(a.view.pid)
+	if was == nil || me == nil {
+		return
+	}
+	play := a.sess.play
+	switch {
+	case cur.Phase == Countdown && (prev.Phase != Countdown || secs(prev.PhaseLeft) != secs(cur.PhaseLeft)):
+		play(SndBeep)
+	case cur.Phase == Playing && prev.Phase == Countdown && me.InRound:
+		play(SndGo)
+	}
+	if was.Alive && !me.Alive && me.InRound {
+		if me.KilledBy != 0 {
+			play(SndFahhhMax)
+		} else {
+			play(SndFahhh)
+		}
+	}
+	if me.Kills > was.Kills {
+		play(SndKill)
+	}
+	if me.Wins > was.Wins {
+		play(SndWin)
+	}
+	if cur.CaseOwner == me.ID && prev.CaseOwner != me.ID {
+		play(SndCase)
+	}
+	if a.view.harasmusNear(me) && time.Since(a.lastHarasmus) > 3*time.Second {
+		a.lastHarasmus = time.Now()
+		play(SndHarasmus)
 	}
 }
 
@@ -249,6 +306,8 @@ func (a app) updateGame(msg tea.Msg) (tea.Model, tea.Cmd) {
 		g.Boost(pid)
 	case "tab":
 		a.view.nextSpectate()
+	case "m":
+		a.view.muted = !a.view.muted
 	}
 	return a, nil
 }
@@ -293,7 +352,7 @@ const logo = `╦  ╦╔═╗╦ ╦╔╦╗  ╔═╗╦ ╦╔═╗╦  �
 func (a app) viewName() string {
 	st := a.st
 	var b strings.Builder
-	b.WriteString(st.title.Render(logo) + "\n\n")
+	b.WriteString(st.title.Render(logo) + "\n" + st.dim.Render("an Operations Team 7 production") + "\n\n")
 	b.WriteString("Multiplayer light cycles. Steer with the arrows, boost with space,\nand make everyone else crash into your trail.\n\n")
 	b.WriteString(st.bold.Render("What should we call you?") + "\n\n")
 	b.WriteString(a.nameInput.View() + "\n\n")
@@ -366,19 +425,19 @@ func (a app) viewBoard() string {
 	} else if len(a.top) == 0 {
 		b.WriteString(st.dim.Render("Nobody's on the board yet.") + "\n")
 	} else {
-		b.WriteString(st.dim.Render(fmt.Sprintf("%4s  %-16s %5s %6s %7s %6s %5s", "#", "PLAYER", "WINS", "KILLS", "DEATHS", "ROUNDS", "WIN%")) + "\n")
+		b.WriteString(st.dim.Render(fmt.Sprintf("%4s  %-16s %5s %6s %7s %6s %6s %5s", "#", "PLAYER", "WINS", "KILLS", "DEATHS", "CASES", "ROUNDS", "WIN%")) + "\n")
 		for _, s := range a.top {
-			row := fmt.Sprintf("%4d  %-16s %5d %6d %7d %6d %4d%%", s.Rank, trunc(s.Name, 16), s.Wins, s.Kills, s.Deaths, s.Rounds, s.Wins*100/max(s.Rounds, 1))
+			row := fmt.Sprintf("%4d  %-16s %5d %6d %7d %6d %6d %4d%%", s.Rank, trunc(s.Name, 16), s.Wins, s.Kills, s.Deaths, s.Cases, s.Rounds, s.Wins*100/max(s.Rounds, 1))
 			if strings.EqualFold(s.Name, a.name) {
 				row = st.bold.Render(row)
 			}
 			b.WriteString(row + "\n")
 		}
 		if a.mine.Rank > 10 {
-			b.WriteString(st.dim.Render(fmt.Sprintf("  …\n%4d  %-16s %5d %6d %7d %6d", a.mine.Rank, a.mine.Name, a.mine.Wins, a.mine.Kills, a.mine.Deaths, a.mine.Rounds)) + "\n")
+			b.WriteString(st.dim.Render(fmt.Sprintf("  …\n%4d  %-16s %5d %6d %7d %6d %6d", a.mine.Rank, a.mine.Name, a.mine.Wins, a.mine.Kills, a.mine.Deaths, a.mine.Cases, a.mine.Rounds)) + "\n")
 		}
 	}
-	b.WriteString("\n" + st.dim.Render("Only rounds with at least two human players count. ") + st.key.Render("esc") + st.dim.Render(" back"))
+	b.WriteString("\n" + st.dim.Render("CASES are rounds won while holding the case. Only rounds with at least two human players count. ") + st.key.Render("esc") + st.dim.Render(" back"))
 	return b.String()
 }
 

@@ -23,6 +23,7 @@ import (
 func play(args []string) {
 	fs := flag.NewFlagSet("play", flag.ExitOnError)
 	name := fs.String("name", os.Getenv("USER"), "name to suggest on the sign-in screen")
+	mute := fs.Bool("mute", false, "no sound effects")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: lightcycles play [flags] HOST[:PORT]   (port defaults to 2222)")
 		fs.PrintDefaults()
@@ -36,7 +37,7 @@ func play(args []string) {
 	if _, _, err := net.SplitHostPort(addr); err != nil {
 		addr = net.JoinHostPort(addr, "2222")
 	}
-	if err := runClient(addr, *name); err != nil {
+	if err := runClient(addr, *name, *mute); err != nil {
 		fmt.Fprintln(os.Stderr, "lightcycles:", err)
 		os.Exit(1)
 	}
@@ -51,7 +52,7 @@ func configDir() (string, error) {
 	return dir, os.MkdirAll(dir, 0o700)
 }
 
-func runClient(addr, user string) error {
+func runClient(addr, user string, mute bool) error {
 	dir, err := configDir()
 	if err != nil {
 		return err
@@ -96,6 +97,14 @@ func runClient(addr, user string) error {
 	if termType == "" {
 		termType = "xterm-256color"
 	}
+	var sounds *player
+	if !mute {
+		sounds = newPlayer(dir)
+	}
+	if sounds != nil {
+		// Ask the server for real sound cues instead of terminal bells.
+		_ = sess.Setenv("LIGHTCYCLES_CLIENT", "1")
+	}
 	if err := sess.RequestPty(termType, h, w, gossh.TerminalModes{gossh.ECHO: 0}); err != nil {
 		return err
 	}
@@ -106,6 +115,9 @@ func runClient(addr, user string) error {
 	defer term.Restore(fd, old)
 
 	sess.Stdout, sess.Stderr = os.Stdout, os.Stderr
+	if sounds != nil {
+		sess.Stdout = &soundFilter{out: os.Stdout, play: sounds.Play}
+	}
 	stdin, err := sess.StdinPipe()
 	if err != nil {
 		return err
