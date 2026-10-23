@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/binary"
+	"errors"
 	"io"
 	"math"
 	"math/rand"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -95,30 +97,76 @@ func (f *soundFilter) Write(p []byte) (int, error) {
 type player struct {
 	dir       string // the player's own sounds; these win
 	serverDir string // sounds the server shipped us, if any
-	cmd       []string
+	cmd       func(path string) *exec.Cmd
 	once      sync.Once
 }
 
-func newPlayer(configDir string) *player {
-	p := &player{}
+// newPlayer returns nil, with the reason, when there's nothing to play
+// sounds with.
+func newPlayer(configDir string) (*player, error) {
+	p := &player{dir: filepath.Join(configDir, "sounds")}
 	switch runtime.GOOS {
 	case "darwin":
-		p.cmd = []string{"afplay"}
+		p.cmd = command("afplay")
 	case "windows":
-		p.cmd = []string{"powershell", "-NoProfile", "-c", "(New-Object Media.SoundPlayer $args[0]).PlaySync()"}
+		p.cmd = windowsPlayer("powershell", func(path string) string { return path })
 	default:
 		for _, c := range [][]string{{"paplay"}, {"pw-play"}, {"aplay", "-q"}, {"ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"}} {
 			if _, err := exec.LookPath(c[0]); err == nil {
-				p.cmd = c
+				p.cmd = command(c...)
 				break
+			}
+		}
+		if p.cmd == nil && isWSL() {
+			// No Linux audio tools, but Windows can play it for us.
+			if _, err := exec.LookPath("powershell.exe"); err == nil {
+				p.cmd = windowsPlayer("powershell.exe", wslPath)
 			}
 		}
 	}
 	if p.cmd == nil {
-		return nil
+		hint := "install one of paplay, pw-play, aplay or ffplay (e.g. sudo apt install pulseaudio-utils)"
+		if runtime.GOOS == "darwin" {
+			hint = "afplay is missing"
+		}
+		return nil, errors.New("no sound: " + hint + ", or pass -mute")
 	}
-	p.dir = filepath.Join(configDir, "sounds")
-	return p
+	return p, nil
+}
+
+func command(argv ...string) func(string) *exec.Cmd {
+	return func(path string) *exec.Cmd {
+		return exec.Command(argv[0], append(argv[1:], path)...)
+	}
+}
+
+// windowsPlayer plays a WAV with PowerShell. The path goes inside the
+// script itself: with -Command, extra arguments are glued onto the script
+// rather than passed as $args.
+func windowsPlayer(powershell string, winPath func(string) string) func(string) *exec.Cmd {
+	return func(path string) *exec.Cmd {
+		quoted := "'" + strings.ReplaceAll(winPath(path), "'", "''") + "'"
+		return exec.Command(powershell, "-NoProfile", "-NonInteractive", "-Command",
+			"(New-Object Media.SoundPlayer "+quoted+").PlaySync()")
+	}
+}
+
+// isWSL reports whether we're a Linux binary running under Windows' WSL.
+func isWSL() bool {
+	if os.Getenv("WSL_DISTRO_NAME") != "" {
+		return true
+	}
+	b, _ := os.ReadFile("/proc/sys/kernel/osrelease")
+	return strings.Contains(strings.ToLower(string(b)), "microsoft")
+}
+
+// wslPath turns a Linux path into one Windows programs can open.
+func wslPath(path string) string {
+	out, err := exec.Command("wslpath", "-w", path).Output()
+	if err != nil {
+		return path
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // Play is fire-and-forget. A WAV in the sounds folder (e.g. a teammate
@@ -135,7 +183,7 @@ func (p *player) Play(s Sound) {
 			break
 		}
 	}
-	cmd := exec.Command(p.cmd[0], append(p.cmd[1:], path)...)
+	cmd := p.cmd(path)
 	if cmd.Start() == nil {
 		go func() { _ = cmd.Wait() }()
 	}

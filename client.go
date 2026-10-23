@@ -104,7 +104,11 @@ func runClient(addr, user string, mute bool) error {
 
 	var sounds *player
 	if !mute {
-		sounds = newPlayer(dir)
+		if sounds, err = newPlayer(dir); err != nil {
+			// Say so before the game takes over the screen, then play on.
+			fmt.Fprintln(os.Stderr, "lightcycles:", err)
+			time.Sleep(2 * time.Second)
+		}
 	}
 	if sounds != nil {
 		sounds.serverDir = fetchServerSounds(client, filepath.Join(dir, "servers", safeDir(addr)))

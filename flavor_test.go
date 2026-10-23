@@ -161,3 +161,11 @@ func TestSoundPackRoundTrip(t *testing.T) {
 		t.Fatalf("sound changed in transit")
 	}
 }
+
+func TestWindowsPlayerQuotesPath(t *testing.T) {
+	cmd := windowsPlayer("powershell", func(p string) string { return p })(`C:\Users\o'brien\fahhh.wav`)
+	want := `(New-Object Media.SoundPlayer 'C:\Users\o''brien\fahhh.wav').PlaySync()`
+	if got := cmd.Args[len(cmd.Args)-1]; got != want {
+		t.Fatalf("script = %q, want %q", got, want)
+	}
+}
