@@ -39,8 +39,12 @@ then `lightcycles serve` / `lightcycles play HOST`.
 
 - **Arrows / WASD / hjkl** steer. You can queue a quick U-turn (e.g. ↑ then ←).
 - **Space** boosts: double speed for a moment, then a 5s cooldown.
+- Your trail starts short (10 cells) and follows behind you like a snake.
+  Drive over orange **•** food to make it 3 cells longer; the arena keeps
+  restocking food, and the scoreboard shows everyone's length.
 - Hit a wall or any trail and you're out. When you crash, your trail
-  vanishes and opens space for everyone else.
+  vanishes and opens space for everyone else, leaving a line of food behind
+  for whoever dares to go and grab it.
 - Before each round everyone gets a ready check: press **Enter** to ready up.
   The round starts once every human is ready, or after 30 seconds.
 - Last cycle alive wins the round. Running someone into your trail is a kill.
