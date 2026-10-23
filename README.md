@@ -97,7 +97,11 @@ repo. Only WAVs up to 4MB named after a known sound are sent; to convert
 an mp3, run `ffmpeg -i clip.mp3 fahhh-meme.wav`.
 
 The client uses your OS's own player (`afplay` on macOS, `paplay`/`pw-play`/
-`aplay` on Linux, PowerShell on Windows). To replace a sound just for yourself, drop a WAV named after it (`fahhh`,
+`aplay`/`ffplay` on Linux, PowerShell on Windows). A minimal Linux install may
+have none of these; the client says so when it starts, and
+`sudo apt install pulseaudio-utils` (Debian/Ubuntu) fixes it. Under WSL,
+`paplay` plays through WSLg's PulseAudio server, and without it the client
+falls back to Windows' PowerShell player. To replace a sound just for yourself, drop a WAV named after it (`fahhh`,
 `fahhh-meme`, `ky`, `beep`, `go`, `kill`, `win`, `case`, `harasmus`) into
 `~/.config/lightcycles/sounds/` (or your OS's config directory).
 
