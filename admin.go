@@ -37,6 +37,9 @@ const (
 
 var started = time.Now()
 
+// version is the commit the server was built from, set by ko (.ko.yaml).
+var version = "dev"
+
 // admin holds what the console needs and guards the password.
 type admin struct {
 	lobby *Lobby
@@ -314,6 +317,7 @@ func (c *console) status(_ []string, _ string) error {
 	}
 	host, _ := os.Hostname()
 	fmt.Fprintf(c.out, "host       %s (%s, %s)\n", host, runtime.Version(), runtime.GOARCH)
+	fmt.Fprintf(c.out, "version    %s\n", version)
 	fmt.Fprintf(c.out, "uptime     %s (since %s)\n", time.Since(started).Round(time.Second), started.Format(time.RFC3339))
 	fmt.Fprintf(c.out, "memory     %.1f MB in use, %.1f MB from the OS\n", float64(m.Alloc)/1e6, float64(m.Sys)/1e6)
 	fmt.Fprintf(c.out, "goroutines %d\n", runtime.NumGoroutine())

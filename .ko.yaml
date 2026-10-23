@@ -13,3 +13,6 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+      # Shown in the lobby and the admin console's status, so you can tell
+      # which build a session is on.
+      - -X main.version={{.Git.ShortCommit}}

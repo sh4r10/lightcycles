@@ -390,7 +390,7 @@ func (a app) viewLobby() string {
 	st := a.st
 	var b strings.Builder
 	b.WriteString(st.title.Render("LIGHT CYCLES") + st.dim.Render("   signed in as ") + st.bold.Render(a.name) +
-		st.dim.Render(fmt.Sprintf(" · %d online · %d games", a.online, len(a.games))) + "\n\n")
+		st.dim.Render(fmt.Sprintf(" · %d online · %d games · build %s", a.online, len(a.games), version)) + "\n\n")
 
 	header := fmt.Sprintf("  %-22s %-12s %-7s %-12s %s", "GAME", "HOST", "SIZE", "PLAYERS", "STATUS")
 	b.WriteString(st.dim.Render(header) + "\n")
