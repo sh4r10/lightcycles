@@ -33,6 +33,7 @@ type styles struct {
 	sel    lipgloss.Style
 	caseHd lipgloss.Style // head of whoever holds the case
 	ky     lipgloss.Style // the KY toolkit pickup
+	food   lipgloss.Style
 	fahhh  lipgloss.Style
 	err    lipgloss.Style
 	key    lipgloss.Style
@@ -49,6 +50,7 @@ func newStyles(r *lipgloss.Renderer) styles {
 		sel:    r.NewStyle().Bold(true).Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#00d7ff")),
 		caseHd: r.NewStyle().Bold(true).Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#ffd700")),
 		ky:     r.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffff00")).Background(lipgloss.Color("#0000af")),
+		food:   r.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffaf00")),
 		fahhh:  r.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")).Background(lipgloss.Color("#d70000")).Padding(0, 1),
 		err:    r.NewStyle().Foreground(lipgloss.Color("#ff5f5f")),
 		key:    r.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffd75f")),
@@ -192,7 +194,8 @@ func (v *gameView) renderHeader(me *Player) string {
 				alive++
 			}
 		}
-		status = st.bold.Render("GO!") + st.dim.Render(fmt.Sprintf("  %d cycles left", alive))
+		status = st.bold.Render("GO!") + st.dim.Render(fmt.Sprintf("  %d cycles left · length ", alive)) +
+			st.cycle[me.Color].Bold(true).Render(fmt.Sprint(me.Length)) + st.dim.Render(" (eat ") + st.food.Render("•") + st.dim.Render(" to grow)")
 		if me.Lag > 0 {
 			pct := kyProgress(me.Lag)
 			bar := strings.Repeat("▰", max(pct/10, 1)) + strings.Repeat("▱", 10-max(pct/10, 1))
@@ -241,6 +244,9 @@ func (v *gameView) renderBoard(vw, vh int) string {
 		if id := s.At(x, y); byID[id] != nil {
 			return id
 		}
+		if s.Food[y*s.W+x] {
+			return -3
+		}
 		return 0
 	}
 	isHead := func(p *Player, x, y int) bool { return p.Alive && p.X == x && p.Y == y }
@@ -264,6 +270,11 @@ func (v *gameView) renderBoard(vw, vh int) string {
 			case -2:
 				b.WriteString(st.ky.Render("KY"))
 				run++
+			case -3:
+				for run < x0+vw && cell(run, y) == -3 {
+					run++
+				}
+				b.WriteString(st.food.Render(strings.Repeat("• ", run-x)))
 			case 0:
 				for run < x0+vw && cell(run, y) == 0 {
 					run++
@@ -321,7 +332,7 @@ func (v *gameView) renderSidePanel(minimap bool) string {
 		b.WriteString(mm)
 		rows -= lipgloss.Height(mm)
 	}
-	b.WriteString(st.bold.Render("SCOREBOARD") + st.dim.Render("        wins kills") + "\n")
+	b.WriteString(st.bold.Render("SCOREBOARD") + st.dim.Render("      len wins kills") + "\n")
 	rows--
 	ranked := v.ranked()
 	// Give the feed at least 8 lines; the jokes need room.
@@ -338,7 +349,7 @@ func (v *gameView) renderSidePanel(minimap bool) string {
 		if p.InRound && !p.Alive {
 			mark = "✕"
 		}
-		row := fmt.Sprintf("%s %-17s %4d %5d", mark, trunc(p.Name, 17), p.Wins, p.Kills)
+		row := fmt.Sprintf("%s %-13s %3d %4d %5d", mark, trunc(p.Name, 13), p.Length, p.Wins, p.Kills)
 		s := st.cycle[p.Color]
 		if p.ID == v.pid {
 			s = s.Bold(true).Underline(true)

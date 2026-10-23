@@ -14,9 +14,10 @@ func newTestGame(t *testing.T) (*Game, *Player, *Player) {
 	b := g.addPlayer("b", KindHuman)
 	g.startRound()
 	clear(g.grid)
+	clear(g.food)
 	place := func(p *Player, x, y int, d Dir) {
 		p.X, p.Y, p.Dir = x, y, d
-		g.set(x, y, p.ID)
+		g.place(p)
 	}
 	place(a, 5, 5, Right)
 	place(b, 9, 5, Left)
@@ -74,6 +75,68 @@ func TestReverseTurnIgnored(t *testing.T) {
 	g.Turn(a.ID, Left) // quick U-turn: up then left is allowed
 	if len(a.queue) != 2 {
 		t.Fatalf("expected two queued turns, got %v", a.queue)
+	}
+}
+
+func trailLen(g *Game, id int) int {
+	n := 0
+	for _, v := range g.grid {
+		if v == id {
+			n++
+		}
+	}
+	return n
+}
+
+func TestTrailCappedAndGrowsWithFood(t *testing.T) {
+	g := NewGame("f", Settings{Size: 1, MaxPlayers: 8}, nil)
+	a := g.addPlayer("a", KindHuman)
+	g.startRound()
+	clear(g.grid)
+	clear(g.food)
+	a.X, a.Y, a.Dir = 2, 5, Right
+	g.place(a)
+	for x := 3; x < 3+startLen+5; x++ {
+		g.advance(a, x, 5)
+	}
+	if n := trailLen(g, a.ID); n != startLen {
+		t.Fatalf("trail should stay at %d cells, got %d", startLen, n)
+	}
+	g.food[5*g.W+a.X+1] = true
+	g.advance(a, a.X+1, 5)
+	if a.Length != startLen+foodGrow || g.food[5*g.W+a.X] {
+		t.Fatalf("eating should grow the trail and use up the pellet: length=%d", a.Length)
+	}
+	for range foodGrow + 3 {
+		g.advance(a, a.X+1, 5)
+	}
+	if n := trailLen(g, a.ID); n != startLen+foodGrow {
+		t.Fatalf("trail should grow to %d cells, got %d", startLen+foodGrow, n)
+	}
+}
+
+func TestCrashDropsFoodAndArenaRestocks(t *testing.T) {
+	g, a, _ := newTestGame(t)
+	if len(g.food) != 0 {
+		t.Fatalf("test helper should start with no food")
+	}
+	g.advance(a, 6, 5)
+	g.advance(a, 6, 6)
+	g.advance(a, 5, 6)
+	a.Dir = Up // straight back into its own trail
+	g.tick = 1
+	g.step()
+	if a.Alive {
+		t.Fatalf("a should have crashed into itself")
+	}
+	if !g.food[5*g.W+5] {
+		t.Fatalf("a crashed trail should leave food behind")
+	}
+	g2 := NewGame("f2", Settings{Size: 0, MaxPlayers: 8}, nil)
+	g2.addPlayer("x", KindHuman)
+	g2.startRound()
+	if len(g2.food) != g2.foodTarget() {
+		t.Fatalf("a new round should stock %d pellets, got %d", g2.foodTarget(), len(g2.food))
 	}
 }
 

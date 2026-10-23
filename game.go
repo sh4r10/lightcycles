@@ -22,6 +22,13 @@ const (
 	kyDelay       = 12  // how far their steering lags behind, in ticks (0.6s)
 	readyLen      = 600 // ticks before a round starts without everyone ready (30s)
 
+	// Trails don't grow forever: you start short and grow by eating food,
+	// slither.io style. Crashed cycles burst into food along their trail.
+	startLen    = 10 // trail cells, head included
+	foodGrow    = 3  // extra trail cells per pellet
+	foodDensity = 90 // one pellet per this many arena cells
+	foodDropGap = 3  // a crashed trail drops a pellet every this many cells
+
 	// Bot skill. Vision is how many open cells they look ahead; a blunder
 	// is a move where they just ride straight without looking.
 	botVision  = 50
@@ -81,8 +88,10 @@ type Player struct {
 	Lag        int // ticks left stuck loading KY toolkit
 	Ready      bool
 	lagged     []delayedTurn
-	Boost      int // ticks of boost remaining
-	Cooldown   int // ticks until boost is ready
+	Boost      int   // ticks of boost remaining
+	Cooldown   int   // ticks until boost is ready
+	Length     int   // how many cells the trail may cover; grows with food
+	trail      []int // grid indices of the trail, oldest first
 }
 
 type delayedTurn struct {
@@ -127,8 +136,9 @@ type Game struct {
 	nextID    int
 	usedColor [maxCycles]bool
 	onRound   func([]RoundStat)
-	caseOwner int     // player ID holding "the case" this round, 0 if none
-	ky        *[2]int // where the KY toolkit pickup sits, nil if none
+	caseOwner int          // player ID holding "the case" this round, 0 if none
+	ky        *[2]int      // where the KY toolkit pickup sits, nil if none
+	food      map[int]bool // grid indices holding a food pellet
 	snap      atomic.Pointer[Snapshot]
 	quit      chan struct{}
 	stopOnce  sync.Once
@@ -143,6 +153,7 @@ func NewGame(id string, s Settings, onRound func([]RoundStat)) *Game {
 		H:        sz.H,
 		players:  map[int]*Player{},
 		grid:     make([]int, sz.W*sz.H),
+		food:     map[int]bool{},
 		nextID:   1,
 		onRound:  onRound,
 		quit:     make(chan struct{}),
@@ -290,7 +301,7 @@ func (g *Game) placeLate(p *Player) {
 		if g.at(s.x, s.y) == 0 {
 			p.X, p.Y, p.Dir = s.x, s.y, s.d
 			p.Alive, p.InRound = true, true
-			g.set(p.X, p.Y, p.ID)
+			g.place(p)
 			return
 		}
 	}
@@ -317,6 +328,60 @@ func (g *Game) clearTrail(id int) {
 	for i, v := range g.grid {
 		if v == id {
 			g.grid[i] = 0
+		}
+	}
+	if p := g.players[id]; p != nil {
+		p.trail = nil
+	}
+}
+
+// place puts a fresh, short cycle on the grid at its spawn.
+func (g *Game) place(p *Player) {
+	g.set(p.X, p.Y, p.ID)
+	p.trail = []int{p.Y*g.W + p.X}
+	p.Length = startLen
+	delete(g.food, p.Y*g.W+p.X)
+}
+
+// advance moves p's head to (x, y), eats any food there and lets the tail
+// catch up so the trail never covers more than p.Length cells.
+func (g *Game) advance(p *Player, x, y int) {
+	p.X, p.Y = x, y
+	i := y*g.W + x
+	g.grid[i] = p.ID
+	p.trail = append(p.trail, i)
+	if g.food[i] {
+		delete(g.food, i)
+		p.Length += foodGrow
+	}
+	for len(p.trail) > p.Length {
+		if t := p.trail[0]; g.grid[t] == p.ID {
+			g.grid[t] = 0
+		}
+		p.trail = p.trail[1:]
+	}
+}
+
+// foodTarget is how many pellets the arena tops itself up to.
+func (g *Game) foodTarget() int { return max(g.W*g.H/foodDensity, 4) }
+
+// spawnFood tops the arena up with up to n pellets on empty cells.
+func (g *Game) spawnFood(n int) {
+	for tries := 0; n > 0 && len(g.food) < g.foodTarget() && tries < n*20; tries++ {
+		i := rand.Intn(len(g.grid))
+		if g.grid[i] != 0 || g.food[i] || (g.ky != nil && g.ky[1]*g.W+g.ky[0] == i) {
+			continue
+		}
+		g.food[i] = true
+		n--
+	}
+}
+
+// dropFood scatters food along a crashed cycle's trail so others can feast.
+func (g *Game) dropFood(p *Player) {
+	for j, i := range p.trail {
+		if j%foodDropGap == 0 && g.grid[i] == p.ID {
+			g.food[i] = true
 		}
 	}
 }
@@ -449,6 +514,7 @@ func (g *Game) startRound() {
 	}
 
 	clear(g.grid)
+	clear(g.food)
 	g.ky = nil
 	sp := g.spawns()
 	order := rand.Perm(len(sp))
@@ -461,8 +527,9 @@ func (g *Game) startRound() {
 		p.Alive, p.InRound = true, true
 		p.Boost, p.Cooldown, p.RoundKills, p.KilledBy = 0, 0, 0, 0
 		p.Lag, p.lagged = 0, nil
-		g.set(p.X, p.Y, p.ID)
+		g.place(p)
 	}
+	g.spawnFood(g.foodTarget())
 	g.round++
 	g.tick = 0
 	g.phase, g.phaseLeft = Countdown, countdownLen
@@ -514,6 +581,7 @@ func (g *Game) step() {
 		g.tick++
 		g.loadLaggedTurns()
 		g.moveAll()
+		g.spawnFood(1)
 		g.chatter()
 		if g.ky == nil && g.tick%kyEvery == kyEvery/2 {
 			g.spawnKY()
@@ -639,14 +707,15 @@ func (g *Game) moveAll() {
 			}
 			continue
 		}
-		m.p.X, m.p.Y = m.x, m.y
-		g.set(m.x, m.y, m.p.ID)
+		g.advance(m.p, m.x, m.y)
 		if g.ky != nil && g.ky[0] == m.x && g.ky[1] == m.y {
 			g.openKY(m.p)
 		}
 	}
-	// Dead cycles' trails vanish, opening up the arena mid-round.
+	// Dead cycles' trails vanish, opening up the arena mid-round, and
+	// leave food behind for whoever is brave enough to go and get it.
 	for id := range dead {
+		g.dropFood(g.players[id])
 		g.clearTrail(id)
 	}
 	if _, ok := dead[g.caseOwner]; ok {
@@ -691,7 +760,7 @@ func (g *Game) loadLaggedTurns() {
 func (g *Game) spawnKY() {
 	for range 50 {
 		x, y := 2+rand.Intn(g.W-4), 2+rand.Intn(g.H-4)
-		if g.at(x, y) != 0 {
+		if g.at(x, y) != 0 || g.food[y*g.W+x] {
 			continue
 		}
 		free := true
@@ -806,6 +875,7 @@ func (g *Game) botThink(p *Player) {
 		if d == p.Dir {
 			score += 3
 		}
+		score += g.foodPull(nx, ny)
 		// Shy away from cells next to another cycle's head.
 		for _, o := range g.players {
 			if o != p && o.Alive && o.InRound && abs(o.X-nx)+abs(o.Y-ny) <= 1 {
@@ -860,6 +930,22 @@ func (g *Game) harasmusThink(p *Player) {
 	}
 }
 
+// foodPull is how tempting (x, y) is to a hungry bot: a lot if there's a
+// pellet right there, a little if one is nearby.
+func (g *Game) foodPull(x, y int) float64 {
+	const reach = 12
+	best := reach
+	for i := range g.food {
+		if d := abs(i%g.W-x) + abs(i/g.W-y); d < best {
+			best = d
+		}
+	}
+	if best == 0 {
+		return 25
+	}
+	return float64(reach-best) * 1.5
+}
+
 func (g *Game) space(sx, sy, limit int) int {
 	seen := map[int]bool{sy*g.W + sx: true}
 	stack := [][2]int{{sx, sy}}
@@ -900,6 +986,7 @@ type Snapshot struct {
 	Banner    string
 	CaseOwner int
 	KY        *[2]int
+	Food      map[int]bool // grid indices holding a pellet
 }
 
 func (s *Snapshot) At(x, y int) int { return s.Grid[y*s.W+x] }
@@ -927,6 +1014,10 @@ func (g *Game) publish() {
 		Feed:      append([]string(nil), g.feed...),
 		Banner:    g.banner,
 		CaseOwner: g.caseOwner,
+		Food:      make(map[int]bool, len(g.food)),
+	}
+	for i := range g.food {
+		s.Food[i] = true
 	}
 	if g.ky != nil {
 		ky := *g.ky
@@ -934,7 +1025,7 @@ func (g *Game) publish() {
 	}
 	for _, p := range g.players {
 		cp := *p
-		cp.queue, cp.lagged = nil, nil
+		cp.queue, cp.lagged, cp.trail = nil, nil, nil
 		s.Players = append(s.Players, cp)
 	}
 	g.snap.Store(s)
